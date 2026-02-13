@@ -54,6 +54,36 @@ APK output:
 
 - `app/build/outputs/apk/debug/app-debug.apk`
 
+## APK Share Support (Phone App)
+
+The app supports receiving APK/APKS files through Android share intents.
+
+Supported incoming actions:
+
+- `ACTION_SEND`
+- `ACTION_SEND_MULTIPLE`
+- `ACTION_VIEW` (for APK content/file URIs)
+
+Supported MIME types:
+
+- `application/vnd.android.package-archive`
+- `application/octet-stream`
+- `application/zip`
+- `application/x-zip-compressed`
+
+Behavior:
+
+- Extracts URIs from `EXTRA_STREAM`, `ClipData`, and `intent.data` fallback.
+- Accepts one or many files.
+- Tries to infer package name automatically from APK/APKS content.
+- Lets you edit/override package name before sending install payload to watch.
+
+Quick test:
+
+1. Build and install `app-debug.apk` on your phone.
+2. In a file manager, Share an `.apk` or `.apks` file to `WearBridge`.
+3. Confirm selected files in app UI and tap `Send install payload`.
+
 ## Direct ADB Install (PC -> Watch)
 
 If you want to install directly from your PC to a watch over ADB (without phone transfer), use:
@@ -75,5 +105,12 @@ Examples:
 ./tools/watch_adb_install.sh app-release.apk
 ./tools/watch_adb_install.sh -s 192.168.1.55:5555 app-release.apk
 ./tools/watch_adb_install.sh --downgrade watchface.apks
+./tools/watch_adb_install.sh app-release.apk -- --user 0
 ```
 
+Passthrough behavior:
+
+- `--downgrade` / `-d` is passed directly to `adb install` / `adb install-multiple`.
+- Additional adb install arguments can be passed either:
+  - with `--adb-arg <arg>` (repeatable), or
+  - after `--` at the end of the command.

@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") [-s SERIAL] [--downgrade] <artifact>
+  $(basename "$0") [-s SERIAL] [--downgrade|-d] [--adb-arg ARG]... <artifact> [-- <adb install args...>]
 
 Artifacts supported:
   - .apk
@@ -18,7 +18,9 @@ Examples:
 
 Notes:
   - If SERIAL is omitted and exactly one ADB device is connected, it is used.
-  - For split packages, this script calls: adb install-multiple -r [ -d ] <apks...>
+  - --downgrade / -d is passed directly to adb install/install-multiple.
+  - Additional adb install args can be passed via --adb-arg or after '--'.
+  - For split packages, this script calls: adb install-multiple -r <apks...>
 USAGE
 }
 
@@ -36,7 +38,7 @@ require_cmd() {
 }
 
 SERIAL=""
-ALLOW_DOWNGRADE=0
+ADB_INSTALL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,16 +48,20 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --downgrade|-d)
-      ALLOW_DOWNGRADE=1
+      ADB_INSTALL_ARGS+=("$1")
+      shift
+      ;;
+    --adb-arg)
+      [[ $# -ge 2 ]] || die "Missing value after $1"
+      ADB_INSTALL_ARGS+=("$2")
+      shift 2
+      ;;
+    --)
       shift
       ;;
     -h|--help)
       usage
       exit 0
-      ;;
-    --)
-      shift
-      break
       ;;
     -*)
       die "Unknown option: $1"
@@ -66,12 +72,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ $# -eq 1 ]] || {
+[[ $# -ge 1 ]] || {
   usage
-  die "Exactly one artifact path is required"
+  die "Artifact path is required"
 }
 
 ARTIFACT="$1"
+shift
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+if [[ $# -gt 0 ]]; then
+  ADB_INSTALL_ARGS+=("$@")
+fi
+
 [[ -e "$ARTIFACT" ]] || die "Artifact not found: $ARTIFACT"
 
 require_cmd adb
@@ -160,10 +174,7 @@ collect_apks_from_archive() {
 
 install_single_apk() {
   local apk="$1"
-  local args=(-r)
-  if [[ "$ALLOW_DOWNGRADE" -eq 1 ]]; then
-    args+=(-d)
-  fi
+  local args=(-r "${ADB_INSTALL_ARGS[@]}")
 
   log "Installing single APK: $apk"
   adb_cmd install "${args[@]}" "$apk"
@@ -171,10 +182,7 @@ install_single_apk() {
 
 install_multiple_apks() {
   local -a files=("$@")
-  local args=(-r)
-  if [[ "$ALLOW_DOWNGRADE" -eq 1 ]]; then
-    args+=(-d)
-  fi
+  local args=(-r "${ADB_INSTALL_ARGS[@]}")
 
   log "Installing split package (${#files[@]} APK files)"
   adb_cmd install-multiple "${args[@]}" "${files[@]}"
