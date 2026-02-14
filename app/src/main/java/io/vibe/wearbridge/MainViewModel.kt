@@ -7,15 +7,22 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.wearable.Node
 import io.vibe.wearbridge.core.BridgeState
+import io.vibe.wearbridge.core.UploadProgress
 import io.vibe.wearbridge.core.WearBridgeClient
 import io.vibe.wearbridge.files.FileSelection
 import io.vibe.wearbridge.files.SelectedFile
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        // Ensure each auto-send session reaches a deterministic terminal state.
+        private const val WATCH_TERMINAL_TIMEOUT_MS = 180_000L
+    }
+
     private val client = WearBridgeClient(application)
 
     val logs = BridgeState.logs
@@ -34,6 +41,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
+    private val _uploadProgress = MutableStateFlow<UploadProgress?>(null)
+    val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.asStateFlow()
+
     init {
         refreshNodes()
     }
@@ -44,6 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearSelectedFiles() {
         _selectedFiles.value = emptyList()
+        _uploadProgress.value = null
     }
 
     fun refreshNodes() {
@@ -98,11 +109,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onFilesPicked(uris: List<Uri>) {
+    fun onFilesPicked(
+        uris: List<Uri>,
+        autoSend: Boolean = false,
+        packageNameOverride: String? = null,
+        sessionId: String? = null
+    ) {
         if (uris.isEmpty()) return
 
         viewModelScope.launch {
             val context = getApplication<Application>()
+            val normalizedSessionId = sessionId?.trim()?.takeIf { it.isNotEmpty() }
+            if (normalizedSessionId != null) {
+                BridgeState.beginInstallSession(normalizedSessionId, "source=phone_intent")
+            }
 
             uris.forEach { uri ->
                 runCatching {
@@ -116,17 +136,124 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 val files = FileSelection.resolve(context, uris)
                 _selectedFiles.value = files
+                _uploadProgress.value = null
                 BridgeState.log("Selected ${files.size} file(s)")
+                if (normalizedSessionId != null) {
+                    BridgeState.logSessionState(
+                        normalizedSessionId,
+                        "files_selected",
+                        "count=${files.size}"
+                    )
+                }
 
                 val guessed = FileSelection.inferPackageName(context, files)
-                if (!guessed.isNullOrBlank()) {
-                    _packageNameInput.value = guessed
-                    BridgeState.log("Detected package name: $guessed")
+                val resolvedPackage = when {
+                    !packageNameOverride.isNullOrBlank() -> packageNameOverride.trim()
+                    !guessed.isNullOrBlank() -> guessed
+                    else -> ""
+                }
+
+                if (resolvedPackage.isNotBlank()) {
+                    _packageNameInput.value = resolvedPackage
+                    if (!packageNameOverride.isNullOrBlank()) {
+                        BridgeState.log("Using package override: $resolvedPackage")
+                        if (normalizedSessionId != null) {
+                            BridgeState.logSessionState(
+                                normalizedSessionId,
+                                "package_override",
+                                "package=$resolvedPackage"
+                            )
+                        }
+                    } else {
+                        BridgeState.log("Detected package name: $resolvedPackage")
+                        if (normalizedSessionId != null) {
+                            BridgeState.logSessionState(
+                                normalizedSessionId,
+                                "package_detected",
+                                "package=$resolvedPackage"
+                            )
+                        }
+                    }
                 } else {
                     BridgeState.log("Package name not detected automatically")
+                    if (normalizedSessionId != null) {
+                        BridgeState.logSessionState(
+                            normalizedSessionId,
+                            "package_missing"
+                        )
+                    }
+                }
+
+                if (autoSend) {
+                    if (resolvedPackage.isBlank()) {
+                        BridgeState.log("Auto-send skipped: package name is required")
+                        if (normalizedSessionId != null) {
+                            BridgeState.logSessionState(
+                                normalizedSessionId,
+                                "auto_send_skipped",
+                                "reason=no_package_name"
+                            )
+                            BridgeState.endInstallSession(normalizedSessionId, "no_package_name")
+                        }
+                        return@runCatching
+                    }
+                    _busy.value = true
+                    _uploadProgress.value = UploadProgress(percent = 0, stage = "starting")
+                    if (normalizedSessionId != null) {
+                        BridgeState.logSessionState(
+                            normalizedSessionId,
+                            "auto_send_started",
+                            "package=$resolvedPackage count=${files.size}"
+                        )
+                    }
+                    runCatching {
+                        client.sendInstallData(
+                            packageName = resolvedPackage,
+                            selectedFiles = files,
+                            onProgress = { progress ->
+                                reportUploadProgress(normalizedSessionId, progress)
+                            }
+                        )
+                        BridgeState.log(
+                            "Auto-send queued (${files.size} file(s)) for $resolvedPackage"
+                        )
+                        if (normalizedSessionId != null) {
+                            BridgeState.logSessionState(
+                                normalizedSessionId,
+                                "auto_send_queued",
+                                "package=$resolvedPackage count=${files.size}"
+                            )
+                            scheduleSessionTerminalTimeout(normalizedSessionId)
+                        }
+                    }.onFailure { error ->
+                        BridgeState.log("Auto-send failed: ${error.message}")
+                        _uploadProgress.value = null
+                        if (normalizedSessionId != null) {
+                            BridgeState.logSessionState(
+                                normalizedSessionId,
+                                "auto_send_failed",
+                                "error=${error.message ?: "unknown"}"
+                            )
+                            BridgeState.endInstallSession(normalizedSessionId, "auto_send_failed")
+                        }
+                    }
+                    _busy.value = false
+                } else if (normalizedSessionId != null) {
+                    BridgeState.logSessionState(
+                        normalizedSessionId,
+                        "awaiting_manual_send"
+                    )
                 }
             }.onFailure { error ->
                 BridgeState.log("Failed to process selected files: ${error.message}")
+                if (normalizedSessionId != null) {
+                    BridgeState.logSessionState(
+                        normalizedSessionId,
+                        "processing_failed",
+                        "error=${error.message ?: "unknown"}"
+                    )
+                    BridgeState.endInstallSession(normalizedSessionId, "processing_failed")
+                }
             }
         }
     }
@@ -145,9 +272,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        launchBusy {
-            client.sendInstallData(packageName, files)
-            BridgeState.log("Install payload queued (${files.size} file(s)) for $packageName")
+        viewModelScope.launch {
+            _busy.value = true
+            _uploadProgress.value = UploadProgress(percent = 0, stage = "starting")
+            runCatching {
+                client.sendInstallData(
+                    packageName = packageName,
+                    selectedFiles = files,
+                    onProgress = { progress ->
+                        reportUploadProgress(null, progress)
+                    }
+                )
+                BridgeState.log("Install payload queued (${files.size} file(s)) for $packageName")
+            }.onFailure { error ->
+                _uploadProgress.value = null
+                BridgeState.log("Operation failed: ${error.message}")
+            }
+            _busy.value = false
+        }
+    }
+
+    private fun scheduleSessionTerminalTimeout(sessionId: String) {
+        viewModelScope.launch {
+            delay(WATCH_TERMINAL_TIMEOUT_MS)
+            if (BridgeState.isSessionActive(sessionId)) {
+                val seconds = WATCH_TERMINAL_TIMEOUT_MS / 1000
+                BridgeState.logSessionState(
+                    sessionId,
+                    "watch_terminal_timeout",
+                    "seconds=$seconds"
+                )
+                BridgeState.endInstallSession(sessionId, "watch_terminal_timeout")
+            }
+        }
+    }
+
+    private fun reportUploadProgress(sessionId: String?, progress: UploadProgress) {
+        _uploadProgress.value = progress
+        val detail = buildString {
+            append("percent=${progress.percent}")
+            append(" stage=${progress.stage}")
+            if (!progress.details.isNullOrBlank()) {
+                append(" ")
+                append(progress.details)
+            }
+        }
+
+        if (!sessionId.isNullOrBlank()) {
+            BridgeState.logSessionState(sessionId, "upload_progress", detail)
+        } else {
+            BridgeState.log("Upload progress: $detail")
         }
     }
 

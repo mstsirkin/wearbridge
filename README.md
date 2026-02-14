@@ -84,13 +84,21 @@ Quick test:
 2. In a file manager, Share an `.apk` or `.apks` file to `WearBridge`.
 3. Confirm selected files in app UI and tap `Send install payload`.
 
-## Direct ADB Install (PC -> Watch)
+## ADB Push via Phone App (PC -> Phone -> Watch)
 
-If you want to install directly from your PC to a watch over ADB (without phone transfer), use:
+Use this when you want to trigger watch install from your PC, but route through the WearBridge app on the phone.
+The script:
+
+1. expands artifact into one or more APK files,
+2. pushes them to WearBridge app-specific phone storage,
+3. launches WearBridge with an explicit intent,
+4. WearBridge forwards install payload to the watch via Data Layer.
+
+Command:
 
 ```bash
 cd /scm/vibe/watchadmin/wearbridge
-./tools/watch_adb_install.sh -s <WATCH_SERIAL_OR_IP:PORT> <artifact>
+./tools/watch_adb_install.sh -s <PHONE_SERIAL> <artifact>
 ```
 
 Supported artifacts:
@@ -103,14 +111,30 @@ Examples:
 
 ```bash
 ./tools/watch_adb_install.sh app-release.apk
-./tools/watch_adb_install.sh -s 192.168.1.55:5555 app-release.apk
-./tools/watch_adb_install.sh --downgrade watchface.apks
-./tools/watch_adb_install.sh app-release.apk -- --user 0
+./tools/watch_adb_install.sh -s NRT8R8KRCUJV6XSO app-release.apk
+./tools/watch_adb_install.sh watchface.apks
+./tools/watch_adb_install.sh --package com.example.app split_bundle.zip
+./tools/watch_adb_install.sh --no-auto-send app-release.apk
+./tools/watch_adb_install.sh --poll-seconds 180 app-release.apk
+./tools/watch_adb_install.sh --no-poll app-release.apk
 ```
 
-Passthrough behavior:
+Options:
 
-- `--downgrade` / `-d` is passed directly to `adb install` / `adb install-multiple`.
-- Additional adb install arguments can be passed either:
-  - with `--adb-arg <arg>` (repeatable), or
-  - after `--` at the end of the command.
+- `-s, --serial`: phone device serial.
+- `--package`: override package name used by WearBridge.
+- `--no-auto-send`: only prefill files in app; do not immediately forward to watch.
+- `--poll-seconds N`: poll app progress log for session updates (default: `120`).
+- `--no-poll`: skip polling.
+
+Per-session files on phone:
+
+- Base: `/sdcard/Android/data/io.vibe.wearbridge/files/WearBridgeSessions`
+- For each run: `<session-id>/`
+  - `payload/` (APK files pushed from PC)
+  - `progress.log` (timestamped session progress)
+- Script polls `progress.log` for the active session.
+- Script prints a ready-to-run cleanup command for that session directory.
+- In auto-send mode, script returns:
+  - success only on explicit `reason=watch_terminal`,
+  - failure on any other terminal reason or if no terminal status is received by timeout.

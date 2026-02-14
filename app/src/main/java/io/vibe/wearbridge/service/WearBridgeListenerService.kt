@@ -52,7 +52,7 @@ class WearBridgeListenerService : WearableListenerService() {
     private suspend fun handleMessage(messageEvent: MessageEvent) {
         when (messageEvent.path) {
             WearProtocol.LOG_MESSAGE_PATH -> {
-                BridgeState.log("Watch: ${String(messageEvent.data, Charsets.UTF_8)}")
+                BridgeState.logWatchMessage(String(messageEvent.data, Charsets.UTF_8))
             }
 
             WearProtocol.APP_LIST_START_PATH -> {

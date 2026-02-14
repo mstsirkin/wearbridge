@@ -15,6 +15,12 @@ import io.vibe.wearbridge.protocol.indexedApkNameKey
 import io.vibe.wearbridge.protocol.indexedApkSizeKey
 import kotlinx.coroutines.tasks.await
 
+data class UploadProgress(
+    val percent: Int,
+    val stage: String,
+    val details: String? = null
+)
+
 class WearBridgeClient(context: Context) {
     private val appContext = context.applicationContext
 
@@ -40,11 +46,29 @@ class WearBridgeClient(context: Context) {
         return sendMessageToAllNodes(WearProtocol.DELETE_APP_PATH, packageName.toByteArray(Charsets.UTF_8))
     }
 
-    suspend fun sendInstallData(packageName: String, selectedFiles: List<SelectedFile>) {
+    suspend fun sendInstallData(
+        packageName: String,
+        selectedFiles: List<SelectedFile>,
+        onProgress: ((UploadProgress) -> Unit)? = null
+    ) {
         require(selectedFiles.isNotEmpty()) { "selectedFiles must not be empty" }
+        onProgress?.invoke(
+            UploadProgress(
+                percent = 5,
+                stage = "validate_inputs",
+                details = "files=${selectedFiles.size}"
+            )
+        )
 
         val nodes = connectedNodes()
         require(nodes.isNotEmpty()) { "No watch nodes connected" }
+        onProgress?.invoke(
+            UploadProgress(
+                percent = 10,
+                stage = "connected_nodes",
+                details = "count=${nodes.size}"
+            )
+        )
 
         val path = WearProtocol.INSTALL_DATA_PATH_PREFIX + System.currentTimeMillis()
         val putDataMapRequest = PutDataMapRequest.create(path)
@@ -56,9 +80,19 @@ class WearBridgeClient(context: Context) {
             putDataMapRequest.dataMap.putAsset(indexedApkAssetKey(index), Asset.createFromUri(file.uri))
             putDataMapRequest.dataMap.putString(indexedApkNameKey(index), file.name)
             putDataMapRequest.dataMap.putLong(indexedApkSizeKey(index), file.sizeBytes)
+            val progress = 15 + (((index + 1) * 60) / selectedFiles.size)
+            onProgress?.invoke(
+                UploadProgress(
+                    percent = progress.coerceIn(15, 75),
+                    stage = "prepare_asset",
+                    details = "index=${index + 1}/${selectedFiles.size} file=${file.name}"
+                )
+            )
         }
 
+        onProgress?.invoke(UploadProgress(percent = 80, stage = "send_data_item"))
         dataClient.putDataItem(putDataMapRequest.asPutDataRequest().setUrgent()).await()
+        onProgress?.invoke(UploadProgress(percent = 100, stage = "queued_to_datalayer"))
     }
 
     private suspend fun sendMessageToAllNodes(path: String, payload: ByteArray): Int {

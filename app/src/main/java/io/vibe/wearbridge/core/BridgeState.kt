@@ -18,6 +18,8 @@ object BridgeState {
 
     private val chunkMutex = Mutex()
     private val chunkBuffer = mutableListOf<RemoteAppInfo>()
+    @Volatile
+    private var activeInstallSessionId: String? = null
 
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
@@ -29,12 +31,58 @@ object BridgeState {
     val companionInfo: StateFlow<CompanionInfo?> = _companionInfo.asStateFlow()
 
     fun log(message: String) {
-        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        val line = "$stamp  $message"
-        _logs.update { current ->
-            val updated = current + line
-            if (updated.size > LOG_LIMIT) updated.takeLast(LOG_LIMIT) else updated
+        emit(message, null)
+    }
+
+    fun beginInstallSession(sessionId: String, metadata: String? = null) {
+        activeInstallSessionId = sessionId
+        val suffix = metadata?.let { " $it" } ?: ""
+        emit("session=$sessionId state=session_started$suffix", sessionId)
+    }
+
+    fun isSessionActive(sessionId: String): Boolean {
+        return activeInstallSessionId == sessionId
+    }
+
+    fun logSessionState(sessionId: String, state: String, details: String? = null) {
+        val suffix = details?.let { " $it" } ?: ""
+        emit("session=$sessionId state=$state$suffix", sessionId)
+    }
+
+    fun endInstallSession(sessionId: String? = activeInstallSessionId, reason: String? = null) {
+        if (sessionId == null) return
+        if (activeInstallSessionId == sessionId) {
+            activeInstallSessionId = null
         }
+        val suffix = reason?.let { " reason=$it" } ?: ""
+        emit("session=$sessionId state=session_finished$suffix", sessionId)
+    }
+
+    fun logWatchMessage(message: String) {
+        val clean = message.replace('\n', ' ').replace('\r', ' ')
+        val sessionId = activeInstallSessionId
+        if (sessionId != null) {
+            emit("session=$sessionId watch=\"$clean\"", sessionId)
+            if (isLikelyTerminalWatchMessage(clean)) {
+                logSessionState(sessionId, "watch_terminal")
+                endInstallSession(sessionId, "watch_terminal")
+            }
+        } else {
+            emit("Watch: $clean", null)
+        }
+    }
+
+    private fun isLikelyTerminalWatchMessage(message: String): Boolean {
+        val value = message.lowercase(Locale.ROOT)
+        return value.contains("status_success") ||
+            value.contains("status_failure") ||
+            value.contains("failure") ||
+            value.contains("error") ||
+            value.contains("ошиб") ||
+            value.contains("успеш") ||
+            value.contains("aborted") ||
+            value.contains("incompatible") ||
+            value.contains("storage")
     }
 
     suspend fun startChunkTransfer(expectedChunks: Int?) {
@@ -79,5 +127,18 @@ object BridgeState {
 
     fun setCompanionInfo(info: CompanionInfo) {
         _companionInfo.value = info
+    }
+
+    private fun emit(message: String, sessionId: String?) {
+        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        val line = "$stamp  ${message.replace('\n', ' ').replace('\r', ' ')}"
+        _logs.update { current ->
+            val updated = current + line
+            if (updated.size > LOG_LIMIT) updated.takeLast(LOG_LIMIT) else updated
+        }
+        ProgressLogFile.appendLine(line)
+        if (!sessionId.isNullOrBlank()) {
+            ProgressLogFile.appendSessionLine(sessionId, line)
+        }
     }
 }

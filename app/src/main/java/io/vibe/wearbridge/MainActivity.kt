@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.vibe.wearbridge.core.UploadProgress
 import io.vibe.wearbridge.files.SelectedFile
 import io.vibe.wearbridge.protocol.CompanionInfo
 import io.vibe.wearbridge.protocol.WearAppRecord
@@ -64,6 +65,15 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val ACTION_INSTALL_TO_WATCH = "io.vibe.wearbridge.action.INSTALL_TO_WATCH"
+        const val EXTRA_AUTO_SEND = "io.vibe.wearbridge.extra.AUTO_SEND"
+        const val EXTRA_PACKAGE_NAME = "io.vibe.wearbridge.extra.PACKAGE_NAME"
+        const val EXTRA_FILE_COUNT = "io.vibe.wearbridge.extra.FILE_COUNT"
+        const val EXTRA_FILE_URI_PREFIX = "io.vibe.wearbridge.extra.FILE_URI_"
+        const val EXTRA_SESSION_ID = "io.vibe.wearbridge.extra.SESSION_ID"
+    }
+
     private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,6 +91,7 @@ class MainActivity : ComponentActivity() {
                 val apps by viewModel.apps.collectAsStateWithLifecycle()
                 val companionInfo by viewModel.companionInfo.collectAsStateWithLifecycle()
                 val busy by viewModel.busy.collectAsStateWithLifecycle()
+                val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
 
                 val picker = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -140,7 +151,8 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onClear = viewModel::clearSelectedFiles,
                                     onInstall = viewModel::installSelectedFiles,
-                                    busy = busy
+                                    busy = busy,
+                                    uploadProgress = uploadProgress
                                 )
                             }
 
@@ -197,8 +209,20 @@ class MainActivity : ComponentActivity() {
     private fun handleIncomingIntent(intent: Intent?) {
         val payload = intent ?: return
         val uris = extractIncomingUris(payload)
+        val autoSend = payload.getBooleanExtra(
+            EXTRA_AUTO_SEND,
+            payload.action == ACTION_INSTALL_TO_WATCH
+        )
+        val packageNameOverride = payload.getStringExtra(EXTRA_PACKAGE_NAME)
+        val sessionId = payload.getStringExtra(EXTRA_SESSION_ID)
+
         if (uris.isNotEmpty()) {
-            viewModel.onFilesPicked(uris)
+            viewModel.onFilesPicked(
+                uris = uris,
+                autoSend = autoSend,
+                packageNameOverride = packageNameOverride,
+                sessionId = sessionId
+            )
         }
     }
 
@@ -207,6 +231,18 @@ class MainActivity : ComponentActivity() {
         val uris = mutableListOf<Uri>()
 
         when (intent.action) {
+            ACTION_INSTALL_TO_WATCH -> {
+                val count = intent.getIntExtra(EXTRA_FILE_COUNT, 0)
+                if (count > 0) {
+                    for (index in 0 until count) {
+                        val key = EXTRA_FILE_URI_PREFIX + index
+                        intent.getStringExtra(key)?.let { raw ->
+                            runCatching { Uri.parse(raw) }.getOrNull()?.let(uris::add)
+                        }
+                    }
+                }
+            }
+
             Intent.ACTION_SEND -> {
                 getSingleStreamUri(intent)?.let(uris::add)
             }
@@ -308,7 +344,8 @@ private fun FileInstallCard(
     onPickFiles: () -> Unit,
     onClear: () -> Unit,
     onInstall: () -> Unit,
-    busy: Boolean
+    busy: Boolean,
+    uploadProgress: UploadProgress?
 ) {
     Card(shape = RoundedCornerShape(14.dp)) {
         Column(
@@ -353,6 +390,19 @@ private fun FileInstallCard(
                 enabled = !busy && selectedFiles.isNotEmpty() && packageName.isNotBlank()
             ) {
                 Text("Send install payload")
+            }
+
+            if (uploadProgress != null) {
+                val percent = uploadProgress.percent.coerceIn(0, 100)
+                val progress = percent / 100f
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "Upload: ${percent}% (${uploadProgress.stage})",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
