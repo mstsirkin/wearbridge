@@ -16,6 +16,7 @@ This tracks remaining work after the current clean-room MVP.
 
 ## 2. Install Pipeline
 
+- [ ] Add explicit watch install status callback (success/failure/exit code/message) and surface it in phone logs + `watch_adb_install.sh` output.
 - [ ] Improve package-name inference for archives (APKS/ZIP) with split APK heuristics and better fallback rules.
 - [ ] Support explicit user override when inferred package name is wrong.
 - [ ] Add install preflight checks (connected node, readable URIs, non-zero file size, expected MIME/extension).
@@ -87,4 +88,3 @@ This tracks remaining work after the current clean-room MVP.
 - [ ] Embedded watch companion bootstrap flow (if needed for future independent stack).
 - [ ] Rich file manager features (scan, previews, statuses, indexing).
 - [ ] Update-check flow and remote version metadata handling.
-
