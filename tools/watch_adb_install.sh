@@ -9,7 +9,9 @@ EXTRA_PACKAGE_NAME="io.vibe.wearbridge.extra.PACKAGE_NAME"
 EXTRA_FILE_COUNT="io.vibe.wearbridge.extra.FILE_COUNT"
 EXTRA_FILE_URI_PREFIX="io.vibe.wearbridge.extra.FILE_URI_"
 EXTRA_SESSION_ID="io.vibe.wearbridge.extra.SESSION_ID"
-PHONE_SESSIONS_BASE="/sdcard/Android/data/${APP_ID}/files/WearBridgeSessions"
+APP_STAGING_ABS="/data/user/0/${APP_ID}/files/WearBridgeStaging"
+APP_STAGING_REL="files/WearBridgeStaging"
+APP_STAGING_MANIFEST_REL="${APP_STAGING_REL}/staged-files.txt"
 
 usage() {
   cat <<USAGE
@@ -31,8 +33,8 @@ Options:
   -s, --serial SERIAL      ADB serial for the phone (required if multiple devices)
       --package NAME       Override package name sent to WearBridge
       --no-auto-send       Open WearBridge with files selected, but do not auto-send to watch
-      --poll-seconds N     Poll session progress log for N seconds (default: 120)
-      --no-poll            Do not poll app log after launch
+      --poll-seconds N     Poll session progress from logcat for N seconds
+      --no-poll            Do not poll logcat after launch
   -h, --help               Show this help
 
 Examples:
@@ -59,14 +61,21 @@ require_cmd() {
 SERIAL=""
 PACKAGE_OVERRIDE=""
 AUTO_SEND=1
-POLL_SECONDS=120
+POLL_SECONDS=0
+POLL_ENABLED=1
 ARTIFACT=""
 TMP_DIR=""
 SESSION_ID=""
+declare -a TMP_FILES=()
 
 cleanup() {
+  for tmp_file in "${TMP_FILES[@]}"; do
+    if [[ -f "$tmp_file" ]]; then
+      rm -f "$tmp_file"
+    fi
+  done
   if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
-    rm -rf "$TMP_DIR"
+    rmdir "$TMP_DIR" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -91,10 +100,11 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "Missing value after $1"
       [[ "$2" =~ ^[0-9]+$ ]] || die "--poll-seconds must be an integer"
       POLL_SECONDS="$2"
+      POLL_ENABLED=1
       shift 2
       ;;
     --no-poll)
-      POLL_SECONDS=0
+      POLL_ENABLED=0
       shift
       ;;
     -h|--help)
@@ -160,6 +170,43 @@ ensure_app_installed() {
   fi
 }
 
+ensure_run_as() {
+  if ! adb_cmd shell run-as "$APP_ID" true >/dev/null 2>&1; then
+    die "run-as failed for $APP_ID (install a debuggable build)"
+  fi
+}
+
+prepare_staging_dir() {
+  adb_cmd shell "run-as $APP_ID sh -c 'mkdir -p \"$APP_STAGING_REL/payload\"; touch \"$APP_STAGING_MANIFEST_REL\"'" >/dev/null
+
+  local previous_manifest_raw
+  previous_manifest_raw="$(adb_cmd shell "run-as $APP_ID sh -c 'cat \"$APP_STAGING_MANIFEST_REL\"'" 2>/dev/null | tr -d '\r')"
+  if [[ -n "$previous_manifest_raw" ]]; then
+    local -a previous_names=()
+    mapfile -t previous_names <<<"$previous_manifest_raw"
+    for name in "${previous_names[@]}"; do
+      [[ -n "$name" ]] || continue
+      adb_cmd shell "run-as $APP_ID sh -c 'rm -f \"$APP_STAGING_REL/payload/$name\"'" >/dev/null
+    done
+  fi
+
+  adb_cmd shell "run-as $APP_ID sh -c ': > \"$APP_STAGING_MANIFEST_REL\"'" >/dev/null
+}
+
+write_staging_manifest() {
+  local -a names=("$@")
+  if [[ ${#names[@]} -eq 0 ]]; then
+    adb_cmd shell "run-as $APP_ID sh -c ': > \"$APP_STAGING_MANIFEST_REL\"'" >/dev/null
+    return
+  fi
+
+  local payload=""
+  for name in "${names[@]}"; do
+    payload+="${name}"$'\n'
+  done
+  adb_cmd shell "run-as $APP_ID sh -c 'cat > \"$APP_STAGING_MANIFEST_REL\"'" <<<"$payload"
+}
+
 collect_apks_from_dir() {
   local dir="$1"
   mapfile -t apks < <(find "$dir" -maxdepth 1 -type f -name '*.apk' | sort)
@@ -182,23 +229,32 @@ collect_apks_from_dir() {
 collect_apks_from_archive() {
   local archive="$1"
   TMP_DIR="$(mktemp -d)"
+  local -a entries=()
+  mapfile -t entries < <(unzip -Z1 "$archive" | awk 'tolower($0) ~ /\.apk$/')
+  [[ ${#entries[@]} -gt 0 ]] || die "Archive contains no .apk files: $archive"
 
-  unzip -qq "$archive" '*.apk' -d "$TMP_DIR" || die "Failed to extract APKs from archive: $archive"
-  mapfile -t apks < <(find "$TMP_DIR" -type f -name '*.apk' | sort)
-  [[ ${#apks[@]} -gt 0 ]] || die "Archive contains no .apk files: $archive"
-
-  local ordered=()
-  local others=()
-  for apk in "${apks[@]}"; do
-    if [[ "$(basename "$apk")" == "base.apk" ]]; then
-      ordered+=("$apk")
+  local -a ordered_entries=()
+  local -a other_entries=()
+  for entry in "${entries[@]}"; do
+    if [[ "${entry##*/,,}" == "base.apk" ]]; then
+      ordered_entries+=("$entry")
     else
-      others+=("$apk")
+      other_entries+=("$entry")
     fi
   done
-  ordered+=("${others[@]}")
+  ordered_entries+=("${other_entries[@]}")
 
-  printf '%s\n' "${ordered[@]}"
+  local -a extracted=()
+  local index=0
+  for entry in "${ordered_entries[@]}"; do
+    index=$((index + 1))
+    local out_path="${TMP_DIR}/archive-${index}.apk"
+    unzip -p "$archive" "$entry" > "$out_path" || die "Failed to extract entry from archive: $entry"
+    TMP_FILES+=("$out_path")
+    extracted+=("$out_path")
+  done
+
+  printf '%s\n' "${extracted[@]}"
 }
 
 collect_input_apks() {
@@ -221,9 +277,8 @@ collect_input_apks() {
 
 push_apks_to_phone() {
   local -a local_apks=("$@")
-  local remote_dir="${PHONE_SESSIONS_BASE}/${SESSION_ID}/payload"
-
-  adb_cmd shell mkdir -p "$remote_dir" >/dev/null
+  local remote_dir_rel="${APP_STAGING_REL}/payload"
+  local remote_dir_abs="${APP_STAGING_ABS}/payload"
 
   local total_files="${#local_apks[@]}"
   local total_bytes=0
@@ -238,19 +293,22 @@ push_apks_to_phone() {
   local -a uris=()
   for local_apk in "${local_apks[@]}"; do
     index=$((index + 1))
-    local base
-    base="$(basename "$local_apk")"
+    local local_name
+    local_name="$(basename "$local_apk")"
+    local remote_name
+    remote_name="$(printf 'slot-%04d.apk' "$index")"
     local file_size
     file_size="$(wc -c < "$local_apk" | tr -d '[:space:]')"
-    local remote_path="${remote_dir}/${base}"
-    adb_cmd push "$local_apk" "$remote_path" >/dev/null
+    local remote_path_rel="${remote_dir_rel}/${remote_name}"
+    local remote_path_abs="${remote_dir_abs}/${remote_name}"
+    adb_cmd shell "run-as $APP_ID sh -c 'cat > \"$remote_path_rel\"'" < "$local_apk"
     done_bytes=$((done_bytes + file_size))
     local percent=0
     if (( total_bytes > 0 )); then
       percent=$((done_bytes * 100 / total_bytes))
     fi
-    uris+=("file://${remote_path}")
-    log "Pushed [${index}/${total_files}] ${base} (${percent}%)" >&2
+    uris+=("file://${remote_path_abs}")
+    log "Pushed [${index}/${total_files}] ${local_name} -> ${remote_name} (${percent}%)" >&2
   done
 
   printf '%s\n' "${uris[@]}"
@@ -261,6 +319,7 @@ launch_wearbridge() {
 
   local -a cmd=(
     shell am start
+    -S
     -n "$APP_ACTIVITY"
     -a "$ACTION_INSTALL"
     --ez "$EXTRA_AUTO_SEND" "$([[ "$AUTO_SEND" -eq 1 ]] && echo true || echo false)"
@@ -281,25 +340,31 @@ launch_wearbridge() {
 
 poll_session_progress() {
   local timeout="$1"
-  local session_log_path="${PHONE_SESSIONS_BASE}/${SESSION_ID}/progress.log"
   local start_ts now_ts elapsed
   local printed=0
 
   start_ts="$(date +%s)"
-  log "Polling progress log for session=$SESSION_ID (timeout=${timeout}s)"
-  log "Log path: $session_log_path"
+  if (( timeout > 0 )); then
+    log "Polling logcat for session=$SESSION_ID (timeout=${timeout}s)"
+  else
+    log "Polling logcat for session=$SESSION_ID (no timeout; Ctrl-C to stop)"
+  fi
 
   while true; do
     local raw
-    raw="$(adb_cmd shell "if [ -f '$session_log_path' ]; then cat '$session_log_path'; fi" 2>/dev/null | tr -d '\r')"
+    raw="$(adb_cmd logcat -d -v brief -s "WearBridge:I" "*:S" 2>/dev/null | tr -d '\r')"
 
     if [[ -n "$raw" ]]; then
-      mapfile -t lines <<<"$raw"
+      local -a lines
+      mapfile -t lines < <(printf '%s\n' "$raw" | grep "session=${SESSION_ID} " || true)
       local total="${#lines[@]}"
       if (( total > printed )); then
         for ((i=printed; i<total; i++)); do
+          local line message
           line="${lines[$i]}"
+          message="${line#*: }"
           if [[ "$line" == *"state=upload_progress"* ]]; then
+            local progress stage
             progress="?"
             stage="unknown"
             if [[ "$line" =~ percent=([0-9]+) ]]; then
@@ -310,29 +375,34 @@ poll_session_progress() {
             fi
             log "Upload progress: ${progress}% (${stage})"
           else
-            printf '%s\n' "$line"
+            printf '%s\n' "$message"
           fi
         done
         printed="$total"
       fi
 
-      if [[ "$raw" == *"state=session_finished reason=watch_terminal"* ]]; then
+      local joined
+      joined="$(printf '%s\n' "${lines[@]}")"
+
+      if [[ "$joined" == *"state=session_finished reason=watch_terminal"* ]]; then
         return 0
       fi
 
-      if [[ "$raw" == *"state=session_finished reason="* ]]; then
+      if [[ "$joined" == *"state=session_finished reason="* ]]; then
         return 2
       fi
 
-      if [[ "$raw" == *"state=auto_send_failed"* ]] || [[ "$raw" == *"state=processing_failed"* ]] || [[ "$raw" == *"reason=auto_send_failed"* ]] || [[ "$raw" == *"reason=processing_failed"* ]] || [[ "$raw" == *"state=watch_terminal_timeout"* ]] || [[ "$raw" == *"reason=watch_terminal_timeout"* ]]; then
+      if [[ "$joined" == *"state=auto_send_failed"* ]] || [[ "$joined" == *"state=processing_failed"* ]] || [[ "$joined" == *"reason=auto_send_failed"* ]] || [[ "$joined" == *"reason=processing_failed"* ]] || [[ "$joined" == *"state=watch_terminal_timeout"* ]] || [[ "$joined" == *"reason=watch_terminal_timeout"* ]]; then
         return 2
       fi
     fi
 
-    now_ts="$(date +%s)"
-    elapsed=$((now_ts - start_ts))
-    if (( elapsed >= timeout )); then
-      return 1
+    if (( timeout > 0 )); then
+      now_ts="$(date +%s)"
+      elapsed=$((now_ts - start_ts))
+      if (( elapsed >= timeout )); then
+        return 1
+      fi
     fi
     sleep 2
   done
@@ -342,15 +412,23 @@ main() {
   pick_serial_if_needed
   log "Using phone: $SERIAL"
   ensure_app_installed
+  ensure_run_as
   SESSION_ID="wb-$(date +%s)-$$-$RANDOM"
   log "Session: $SESSION_ID"
 
   mapfile -t local_apks < <(collect_input_apks)
   [[ ${#local_apks[@]} -gt 0 ]] || die "No APK files to send"
 
-  local session_dir="${PHONE_SESSIONS_BASE}/${SESSION_ID}"
+  local session_dir="$APP_STAGING_ABS"
   log "Preparing ${#local_apks[@]} APK file(s)"
+  prepare_staging_dir
   mapfile -t phone_uris < <(push_apks_to_phone "${local_apks[@]}")
+  local -a manifest_names=()
+  local idx
+  for ((idx = 1; idx <= ${#local_apks[@]}; idx++)); do
+    manifest_names+=("$(printf 'slot-%04d.apk' "$idx")")
+  done
+  write_staging_manifest "${manifest_names[@]}"
 
   launch_wearbridge "${phone_uris[@]}"
 
@@ -360,7 +438,7 @@ main() {
     log "WearBridge launched with files selected (manual send mode)"
   fi
 
-  if (( POLL_SECONDS > 0 )) && [[ "$AUTO_SEND" -eq 1 ]]; then
+  if (( POLL_ENABLED == 1 )) && [[ "$AUTO_SEND" -eq 1 ]]; then
     if poll_session_progress "$POLL_SECONDS"; then
       log "Session reached terminal state"
     else
@@ -373,11 +451,7 @@ main() {
   fi
 
   log "Session dir on phone: $session_dir"
-  if [[ -n "$SERIAL" ]]; then
-    log "Cleanup command: adb -s $SERIAL shell rm -rf '$session_dir'"
-  else
-    log "Cleanup command: adb shell rm -rf '$session_dir'"
-  fi
+  log "Cleanup: previous staged files are deleted explicitly by name on each new run"
   log "Done"
 }
 

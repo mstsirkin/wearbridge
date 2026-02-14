@@ -1,5 +1,6 @@
 package io.vibe.wearbridge.core
 
+import android.util.Log
 import io.vibe.wearbridge.protocol.CompanionInfo
 import io.vibe.wearbridge.protocol.RemoteAppInfo
 import io.vibe.wearbridge.protocol.WearAppRecord
@@ -15,6 +16,7 @@ import java.util.Locale
 
 object BridgeState {
     private const val LOG_LIMIT = 300
+    private const val LOG_TAG = "WearBridge"
 
     private val chunkMutex = Mutex()
     private val chunkBuffer = mutableListOf<RemoteAppInfo>()
@@ -129,16 +131,14 @@ object BridgeState {
         _companionInfo.value = info
     }
 
-    private fun emit(message: String, sessionId: String?) {
+    private fun emit(message: String, _sessionId: String?) {
         val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        val line = "$stamp  ${message.replace('\n', ' ').replace('\r', ' ')}"
+        val clean = message.replace('\n', ' ').replace('\r', ' ')
+        val line = "$stamp  $clean"
         _logs.update { current ->
             val updated = current + line
             if (updated.size > LOG_LIMIT) updated.takeLast(LOG_LIMIT) else updated
         }
-        ProgressLogFile.appendLine(line)
-        if (!sessionId.isNullOrBlank()) {
-            ProgressLogFile.appendSessionLine(sessionId, line)
-        }
+        Log.i(LOG_TAG, clean)
     }
 }

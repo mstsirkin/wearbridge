@@ -11,18 +11,12 @@ import io.vibe.wearbridge.core.UploadProgress
 import io.vibe.wearbridge.core.WearBridgeClient
 import io.vibe.wearbridge.files.FileSelection
 import io.vibe.wearbridge.files.SelectedFile
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    companion object {
-        // Ensure each auto-send session reaches a deterministic terminal state.
-        private const val WATCH_TERMINAL_TIMEOUT_MS = 180_000L
-    }
-
     private val client = WearBridgeClient(application)
 
     val logs = BridgeState.logs
@@ -223,7 +217,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 "auto_send_queued",
                                 "package=$resolvedPackage count=${files.size}"
                             )
-                            scheduleSessionTerminalTimeout(normalizedSessionId)
                         }
                     }.onFailure { error ->
                         BridgeState.log("Auto-send failed: ${error.message}")
@@ -289,21 +282,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 BridgeState.log("Operation failed: ${error.message}")
             }
             _busy.value = false
-        }
-    }
-
-    private fun scheduleSessionTerminalTimeout(sessionId: String) {
-        viewModelScope.launch {
-            delay(WATCH_TERMINAL_TIMEOUT_MS)
-            if (BridgeState.isSessionActive(sessionId)) {
-                val seconds = WATCH_TERMINAL_TIMEOUT_MS / 1000
-                BridgeState.logSessionState(
-                    sessionId,
-                    "watch_terminal_timeout",
-                    "seconds=$seconds"
-                )
-                BridgeState.endInstallSession(sessionId, "watch_terminal_timeout")
-            }
         }
     }
 
