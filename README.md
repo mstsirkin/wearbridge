@@ -68,12 +68,30 @@ APK output:
 
 ## Watch Permissions (Required)
 
-On the watch, make sure `WearBridge Watch` has these permissions/special access enabled:
+WearBridge declares watch-side manifest permissions for install/delete/query flows:
 
-- `System settings` (modify system settings)
-- `Install apps` / `Install unknown apps`
+- `REQUEST_INSTALL_PACKAGES`
+- `REQUEST_DELETE_PACKAGES`
+- `QUERY_ALL_PACKAGES`
 
-Without these, watch-side install flows can fail or stall waiting for system restrictions.
+Only `Install unknown apps` behaves like user-configurable special access. The manifest
+permissions above are not manually grantable runtime permissions.
+
+For install flows to work reliably, make sure `WearBridge Watch` is allowed to install
+unknown apps (source installs) on the watch.
+
+Best-effort adb setup helper (watch device):
+
+```bash
+./tools/watch_adb_setup_access.sh -s <WATCH_SERIAL>
+```
+
+This helper tries to:
+
+- enable the install-source app-op (`REQUEST_INSTALL_PACKAGES`)
+- enable the `WearBridge Screenshot Capture` accessibility service
+
+Some Wear OS builds may still require manual confirmation in Settings.
 
 ## Watch Screenshot Setup (Required for Screenshot Feature)
 
@@ -84,6 +102,12 @@ Before screenshots will work:
 1. Install and open `WearBridge Watch` on the watch at least once.
 2. On the watch, open system Accessibility settings.
 3. Enable `WearBridge Screenshot Capture` accessibility service.
+
+You can also try enabling it from adb (watch device) using:
+
+```bash
+./tools/watch_adb_setup_access.sh -s <WATCH_SERIAL> --skip-install-appops
+```
 
 If the service is disabled, screenshot requests will fail and capability status in the
 phone UI will show screenshot as `not ready`.
@@ -218,3 +242,5 @@ Notes:
 - Success condition is `state=session_finished reason=screenshot_saved`.
 - The watch accessibility service must already be enabled or the request will fail with
   `screenshot_request_failed`.
+- To best-effort configure install-source access + screenshot accessibility service on the
+  watch first, run `./tools/watch_adb_setup_access.sh -s <WATCH_SERIAL>`.
