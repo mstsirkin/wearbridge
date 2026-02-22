@@ -13,6 +13,8 @@ It does **not** reuse source code from the existing `wearload` app.
   - Receive chunked watch app list
   - Send APK/APKS install payload to watch
   - Receive install status/progress logs from watch
+  - Trigger watch screenshot capture (phone UI / adb via phone)
+  - Receive watch screenshot export (`/screenshot-export`) and save to `Pictures/WearBridge`
   - Request app delete on watch
   - Request app export from watch
   - Receive exported archive (`/apk-export`) and save to `Downloads/WearBridge`
@@ -31,6 +33,9 @@ Message paths:
 - `/log-message`
 - `/check-companion`
 - `/check-companion-response`
+- `/check-capabilities`
+- `/check-capabilities-response`
+- `/request-screenshot`
 
 Data layer paths and keys:
 
@@ -44,6 +49,10 @@ Data layer paths and keys:
   - `apk_file` (Asset)
   - `package_name` (String)
   - `app_label` (String)
+- Screenshot export payload path: `/screenshot-export`
+  - `screenshot_file` (Asset)
+  - `request_id` (String, optional)
+  - `mime_type` (String, optional)
 
 ## Build
 
@@ -65,6 +74,19 @@ On the watch, make sure `WearBridge Watch` has these permissions/special access 
 - `Install apps` / `Install unknown apps`
 
 Without these, watch-side install flows can fail or stall waiting for system restrictions.
+
+## Watch Screenshot Setup (Required for Screenshot Feature)
+
+Screenshot capture uses an accessibility service on the watch.
+
+Before screenshots will work:
+
+1. Install and open `WearBridge Watch` on the watch at least once.
+2. On the watch, open system Accessibility settings.
+3. Enable `WearBridge Screenshot Capture` accessibility service.
+
+If the service is disabled, screenshot requests will fail and capability status in the
+phone UI will show screenshot as `not ready`.
 
 ## APK Share Support (Phone App)
 
@@ -95,6 +117,22 @@ Quick test:
 1. Build and install `wearbridge-phone-debug.apk` on your phone.
 2. In a file manager, Share an `.apk` or `.apks` file to `WearBridge`.
 3. Confirm selected files in app UI and tap `Send install payload`.
+
+## Watch Screenshot from Phone UI
+
+Use this when you want a screenshot saved to the phone via the Wear Data Layer.
+
+1. Make sure the watch accessibility service (`WearBridge Screenshot Capture`) is enabled.
+2. In the phone app, tap `Check companion` to refresh capability status (optional but useful).
+3. Tap `Screenshot`.
+4. Wait for the status/log lines; on success, the image is saved to:
+   - `Pictures/WearBridge` (phone media library)
+
+Notes:
+
+- Screenshot success is phone-side `screenshot_saved` (after the phone stores the image),
+  not just a watch capture success log line.
+- If screenshot capability shows `not ready`, check the watch accessibility service setting.
 
 ## ADB Push via Phone App (PC -> Phone -> Watch)
 
@@ -150,3 +188,33 @@ Per-session files on phone:
 - In auto-send mode, script returns:
   - success only on explicit `reason=watch_terminal`,
   - failure on any other terminal reason or if no terminal status is received by timeout.
+
+## ADB Watch Screenshot via Phone App (PC -> Phone -> Watch)
+
+Use this when you want to trigger a watch screenshot from your PC, but route through
+the phone app and save the image on the phone.
+
+Command:
+
+```bash
+cd /scm/vibe/watchadmin/wearbridge
+./tools/watch_adb_screenshot.sh -s <PHONE_SERIAL>
+```
+
+Examples:
+
+```bash
+./tools/watch_adb_screenshot.sh
+./tools/watch_adb_screenshot.sh -s NRT8R8KRCUJV6XSO
+./tools/watch_adb_screenshot.sh --poll-seconds 60
+./tools/watch_adb_screenshot.sh --request-id demo-shot-001
+./tools/watch_adb_screenshot.sh --no-poll
+```
+
+Notes:
+
+- The script launches the phone app with a custom screenshot intent, then optionally polls
+  phone logcat session lines (`tag=WearBridge`).
+- Success condition is `state=session_finished reason=screenshot_saved`.
+- The watch accessibility service must already be enabled or the request will fail with
+  `screenshot_request_failed`.
