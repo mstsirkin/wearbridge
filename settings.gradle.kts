@@ -15,4 +15,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "WearBridge"
-include(":app")
+include(":wearbridge-phone")
+project(":wearbridge-phone").projectDir = file("app")
+
+include(":wearbridge-watch")
+project(":wearbridge-watch").projectDir = file("watch")
