@@ -57,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.vibe.wearbridge.core.UploadProgress
 import io.vibe.wearbridge.files.SelectedFile
+import io.vibe.wearbridge.protocol.CapabilityReport
+import io.vibe.wearbridge.protocol.CapabilityStatus
 import io.vibe.wearbridge.protocol.CompanionInfo
 import io.vibe.wearbridge.protocol.WearAppRecord
 import java.text.DateFormat
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
                 val logs by viewModel.logs.collectAsStateWithLifecycle()
                 val apps by viewModel.apps.collectAsStateWithLifecycle()
                 val companionInfo by viewModel.companionInfo.collectAsStateWithLifecycle()
+                val capabilityReport by viewModel.capabilityReport.collectAsStateWithLifecycle()
                 val busy by viewModel.busy.collectAsStateWithLifecycle()
                 val uploadProgress by viewModel.uploadProgress.collectAsStateWithLifecycle()
 
@@ -123,6 +126,7 @@ class MainActivity : ComponentActivity() {
                                 StatusCard(
                                     connectedCount = connectedNodes.size,
                                     companionInfo = companionInfo,
+                                    capabilityReport = capabilityReport,
                                     busy = busy
                                 )
                             }
@@ -293,8 +297,10 @@ class MainActivity : ComponentActivity() {
 private fun StatusCard(
     connectedCount: Int,
     companionInfo: CompanionInfo?,
+    capabilityReport: CapabilityReport?,
     busy: Boolean
 ) {
+    val screenshotCaps = capabilityReport?.capabilities?.get("screenshot")
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -310,6 +316,29 @@ private fun StatusCard(
                 Text("Watch companion: ${companionInfo.versionName} (${companionInfo.versionCode})")
             } else {
                 Text("Watch companion: unknown")
+            }
+            Text("Screenshot: ${formatScreenshotCapabilitySummary(screenshotCaps)}")
+            if (screenshotCaps != null) {
+                screenshotCaps.missingRequirements
+                    ?.filter { it.isNotBlank() }
+                    ?.take(3)
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { codes ->
+                        Text(
+                            "Needs: ${codes.joinToString(", ") { humanizeCapabilityCode(it) }}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                screenshotCaps.requiredUserActions
+                    ?.filter { it.isNotBlank() }
+                    ?.take(2)
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { actions ->
+                        Text(
+                            "Action: ${actions.joinToString(", ") { humanizeCapabilityCode(it) }}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
             }
             if (busy) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -477,4 +506,21 @@ private fun formatBytes(size: Long): String {
 private fun formatDate(timestamp: Long): String {
     if (timestamp <= 0L) return "unknown time"
     return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp))
+}
+
+private fun formatScreenshotCapabilitySummary(status: CapabilityStatus?): String {
+    if (status == null) return "unknown"
+
+    val method = status.method?.takeIf { it.isNotBlank() } ?: "unknown"
+    return when {
+        status.supported && status.ready -> "ready ($method)"
+        status.supported -> "not ready ($method)"
+        else -> "unsupported${if (method == "unknown") "" else " ($method)"}"
+    }
+}
+
+private fun humanizeCapabilityCode(value: String): String {
+    return value
+        .trim()
+        .replace('_', ' ')
 }

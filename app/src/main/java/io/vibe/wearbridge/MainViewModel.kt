@@ -25,6 +25,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val logs = BridgeState.logs
     val apps = BridgeState.apps
     val companionInfo = BridgeState.companionInfo
+    val capabilityReport = BridgeState.capabilityReport
 
     private val _connectedNodes = MutableStateFlow<List<Node>>(emptyList())
     val connectedNodes: StateFlow<List<Node>> = _connectedNodes.asStateFlow()
