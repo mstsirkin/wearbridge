@@ -1,16 +1,18 @@
-# WearBridge (clean-room phone client)
+# WearBridge (clean-room phone + watch stack)
 
 This project is a fresh implementation under `/scm/vibe/watchadmin/wearbridge`.
 It does **not** reuse source code from the existing `wearload` app.
 
 ## Current scope
 
-- Phone app only (`:app`)
-- Compatible with the existing WearLoad watch app protocol
-- Core flows implemented:
+- Phone app (`:wearbridge-phone`)
+- Watch companion app (`:wearbridge-watch`)
+- WearLoad-compatible protocol on both sides
+- Core flows implemented end-to-end:
   - Request watch app sync
   - Receive chunked watch app list
   - Send APK/APKS install payload to watch
+  - Receive install status/progress logs from watch
   - Request app delete on watch
   - Request app export from watch
   - Receive exported archive (`/apk-export`) and save to `Downloads/WearBridge`
@@ -47,12 +49,22 @@ Data layer paths and keys:
 
 ```bash
 cd /scm/vibe/watchadmin/wearbridge
-./gradlew :app:assembleDebug
+./gradlew :wearbridge-phone:assembleDebug :wearbridge-watch:assembleDebug
 ```
 
 APK output:
 
-- `app/build/outputs/apk/debug/app-debug.apk`
+- `app/build/outputs/apk/debug/wearbridge-phone-debug.apk`
+- `watch/build/outputs/apk/debug/wearbridge-watch-debug.apk`
+
+## Watch Permissions (Required)
+
+On the watch, make sure `WearBridge Watch` has these permissions/special access enabled:
+
+- `System settings` (modify system settings)
+- `Install apps` / `Install unknown apps`
+
+Without these, watch-side install flows can fail or stall waiting for system restrictions.
 
 ## APK Share Support (Phone App)
 
@@ -80,7 +92,7 @@ Behavior:
 
 Quick test:
 
-1. Build and install `app-debug.apk` on your phone.
+1. Build and install `wearbridge-phone-debug.apk` on your phone.
 2. In a file manager, Share an `.apk` or `.apks` file to `WearBridge`.
 3. Confirm selected files in app UI and tap `Send install payload`.
 
