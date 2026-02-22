@@ -1,6 +1,8 @@
 package io.vibe.wearbridge.protocol
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 object WearProtocol {
     const val SYNC_REQUEST_PATH = "/request-sync"
@@ -18,6 +20,8 @@ object WearProtocol {
 
     const val CHECK_COMPANION_PATH = "/check-companion"
     const val CHECK_COMPANION_RESPONSE_PATH = "/check-companion-response"
+    const val CHECK_CAPABILITIES_PATH = "/check-capabilities"
+    const val CHECK_CAPABILITIES_RESPONSE_PATH = "/check-capabilities-response"
 
     const val INSTALL_DATA_PATH_PREFIX = "/apk/"
 
@@ -35,6 +39,36 @@ fun indexedApkSizeKey(index: Int): String = "apk_size_$index"
 data class CompanionInfo(
     val versionName: String,
     val versionCode: Int
+)
+
+@Serializable
+data class CapabilityCheckRequest(
+    @SerialName("request_id")
+    val requestId: String? = null,
+    val features: List<String>? = null
+)
+
+@Serializable
+data class CapabilityReport(
+    @SerialName("request_id")
+    val requestId: String? = null,
+    @SerialName("protocol_version")
+    val protocolVersion: Int? = null,
+    val capabilities: Map<String, CapabilityStatus>? = null
+)
+
+@Serializable
+data class CapabilityStatus(
+    val supported: Boolean,
+    val ready: Boolean,
+    val method: String? = null,
+    @SerialName("missing_permissions")
+    val missingPermissions: List<String>? = null,
+    @SerialName("missing_requirements")
+    val missingRequirements: List<String>? = null,
+    @SerialName("required_user_actions")
+    val requiredUserActions: List<String>? = null,
+    val details: JsonObject? = null
 )
 
 @Serializable

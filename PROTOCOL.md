@@ -4,9 +4,10 @@ This document defines the expected protocol between:
 
 - phone app (`io.vibe.wearbridge`)
 - watch app (currently WearLoad-compatible)
-- `tools/watch_adb_install.sh` (adb automation)
+- adb automation (`tools/watch_adb_install.sh` and screenshot trigger flows)
 
-It covers both wire protocol and the expected free-text log format used today.
+It covers both wire protocol and the expected free-text log format used today, plus
+the screenshot-capture protocol extension used by phone UI and adb-triggered flows.
 
 ## 1. Compatibility Target
 
@@ -17,6 +18,26 @@ Current implementation uses:
 - Wear `MessageClient` paths for control/log/events.
 - Wear `DataClient` `DataItem` for APK payloads and APK export asset.
 - Phone-side logcat session lines (`tag=WearBridge`) for adb polling.
+
+### 1.1 Backward Compatibility Rules (Normative)
+
+This protocol is extended additively. New screenshot/capability support must not break
+older phone/watch builds.
+
+Rules:
+
+- Existing paths and payload formats remain valid and unchanged.
+- New message paths are optional. Peers must tolerate "no response" and treat it as
+  unsupported/legacy behavior.
+- New JSON fields must be optional; receivers should ignore unknown fields.
+- `/check-companion-response` remains valid with only:
+  - `versionName`
+  - `versionCode`
+- Screenshot request payload may be empty bytes; watch must treat empty payload as a
+  valid request with default behavior.
+- `request_id` is optional on all screenshot-related payloads/messages.
+- Watch should only send new response paths (e.g. capability response) when explicitly
+  requested, to avoid noisy "unhandled path" logs on older phones.
 
 ## 2. Phone -> Watch Protocol
 
@@ -39,6 +60,20 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
 - `/check-companion`
   - Payload: empty bytes
   - Meaning: request companion version info
+
+- `/check-capabilities`
+  - Payload: UTF-8 JSON object or empty bytes
+  - Recommended JSON fields:
+    - `request_id` (string, optional)
+    - `features` (array of strings, optional; e.g. `["screenshot"]`)
+  - Meaning: request structured watch capability/readiness status (including screenshot)
+
+- `/request-screenshot`
+  - Payload: UTF-8 JSON object or empty bytes
+  - Recommended JSON fields:
+    - `request_id` (string, optional; adb should set this to match `SESSION_ID`)
+    - `source` (string, optional; e.g. `phone_ui` or `adb`)
+  - Meaning: request screenshot capture on watch and return image asset to phone
 
 ### 2.2 Install payload (`DataItem`)
 
@@ -74,6 +109,9 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
 - `/check-companion-response`
   - Payload: JSON `CompanionInfo`
 
+- `/check-capabilities-response`
+  - Payload: JSON `CapabilityReport`
+
 ### 3.2 Data path
 
 - `/apk-export`
@@ -81,6 +119,96 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
     - `apk_file` (`Asset`)
     - `package_name` (string, optional for file naming)
     - `app_label` (string, optional for file naming)
+
+- `/screenshot-export`
+  - Data map keys:
+    - `screenshot_file` (`Asset`, required)
+    - `request_id` (string, optional but recommended for adb correlation)
+    - `mime_type` (string, optional; default `image/png`)
+    - `capture_timestamp` (long, optional; epoch millis)
+    - `width` (int, optional)
+    - `height` (int, optional)
+
+### 3.3 Capability Report Schema (JSON)
+
+Use this schema for `/check-capabilities-response`.
+
+Top-level object: `CapabilityReport`
+
+- `request_id` (string, optional)
+- `protocol_version` (int, optional; recommended `1`)
+- `capabilities` (object, optional)
+  - keyed by feature name (e.g. `screenshot`)
+
+Feature object shape (`CapabilityStatus`):
+
+- `supported` (bool, required)
+  - `true` if the feature is implemented on this watch build/device combination
+- `ready` (bool, required)
+  - `true` if the feature can run now without additional user/system setup
+- `method` (string, optional)
+  - For screenshot: `accessibility`, `media_projection`, `none`, or vendor-specific value
+- `missing_permissions` (array<string>, optional)
+  - Android manifest/runtime permissions missing at time of check (usually empty for
+    accessibility-based screenshots)
+- `missing_requirements` (array<string>, optional)
+  - Non-permission blockers (service disabled, consent required, API unsupported, etc.)
+- `required_user_actions` (array<string>, optional)
+  - Human/actionable steps the phone can surface in UI
+- `details` (object, optional)
+  - Extra diagnostic fields; receivers must ignore unknown keys
+
+Recommended `screenshot` `missing_requirements` codes:
+
+- `feature_not_built`
+- `api_unsupported`
+- `accessibility_service_missing`
+- `accessibility_service_disabled`
+- `accessibility_screenshot_capability_missing`
+- `media_projection_consent_required`
+- `media_projection_foreground_service_missing`
+- `device_policy_blocked`
+- `capture_failed`
+
+Recommended `screenshot` `required_user_actions` codes:
+
+- `enable_accessibility_service`
+- `grant_media_projection_consent`
+- `update_watch_app`
+- `unlock_watch`
+
+Compatibility behavior for capability checks:
+
+- New phone -> old watch:
+  - `/check-capabilities` may be ignored; phone should timeout/fallback and treat
+    capability status as `unknown` (legacy watch).
+- Old phone -> new watch:
+  - No change; old phone keeps using `/check-companion`.
+- New watch -> old phone:
+  - Watch should not emit `/check-capabilities-response` unless asked.
+
+Example `CapabilityReport`:
+
+```json
+{
+  "request_id": "sess-20260222-001",
+  "protocol_version": 1,
+  "capabilities": {
+    "screenshot": {
+      "supported": true,
+      "ready": false,
+      "method": "accessibility",
+      "missing_permissions": [],
+      "missing_requirements": ["accessibility_service_disabled"],
+      "required_user_actions": ["enable_accessibility_service"],
+      "details": {
+        "api_level": 33,
+        "take_screenshot_api_available": true
+      }
+    }
+  }
+}
+```
 
 ## 4. Phone App Intents
 
@@ -136,6 +264,21 @@ URIs used by `tools/watch_adb_install.sh` are `file://` paths under:
 
 - `/data/user/0/io.vibe.wearbridge/files/WearBridgeStaging/payload/slot-XXXX.apk`
 
+### 4.5 Custom screenshot intent (used by adb/manual automation)
+
+- Action: `io.vibe.wearbridge.action.REQUEST_WATCH_SCREENSHOT`
+- URI source: none
+- Extras:
+  - `io.vibe.wearbridge.extra.SESSION_ID` (string, recommended for logcat polling)
+  - `io.vibe.wearbridge.extra.REQUEST_ID` (optional string; if absent, phone may reuse `SESSION_ID`)
+  - `io.vibe.wearbridge.extra.SOURCE` (optional string; e.g. `adb`)
+
+Phone behavior for this intent:
+
+- Begin/log a session using the provided `SESSION_ID` (if present)
+- Send `/request-screenshot` to connected watch node(s)
+- Wait for `/screenshot-export` `DataItem`, save image locally, and log save result
+
 ## 5. Session and Logcat Protocol
 
 Phone emits session lines to logcat (`tag=WearBridge`) in this format:
@@ -173,6 +316,26 @@ Failure conditions in script:
 
 Default poll mode has no timeout and is intended to be stopped by Ctrl-C if needed.
 
+Screenshot-trigger sessions (phone UI or adb) should use the same line format and add
+these states (names are normative for screenshot support):
+
+- `screenshot_request_started`
+- `screenshot_request_sent`
+- `screenshot_request_failed`
+- `screenshot_received`
+- `screenshot_saved` (includes file name and/or URI details)
+- `screenshot_save_failed`
+
+Recommended adb screenshot success condition:
+
+- `state=session_finished reason=screenshot_saved`
+
+Recommended adb screenshot failure conditions:
+
+- `state=session_finished reason=screenshot_request_failed`
+- `state=session_finished reason=screenshot_save_failed`
+- `screenshot_request_failed` / `screenshot_save_failed` (early failure before terminal line)
+
 ## 6. Expected `/log-message` Free-Text Format
 
 Current watch compatibility is text-based. There is no strict schema yet.
@@ -209,6 +372,21 @@ Use these text lines on `/log-message`:
 
 These remain free text but are stable enough for parsing and human logs.
 
+Screenshot flows should also use `/log-message` with similar free-text templates:
+
+- Progress (non-terminal):
+  - `SCREENSHOT_PROGRESS phase=<phase> request_id=<id>`
+
+- Terminal success (watch capture/export queued):
+  - `SCREENSHOT_STATUS status_success request_id=<id> mime=image/png message=<text>`
+
+- Terminal failure:
+  - `SCREENSHOT_STATUS status_failure request_id=<id> code=<code> message=<text>`
+
+For adb screenshot automation, watch terminal success is not the final "file ready on
+phone" signal. Use phone-side `screenshot_saved` / `session_finished reason=screenshot_saved`
+for completion.
+
 ## 7. Example Flow (Install)
 
 1. Script stages APK(s) in fixed app-private slots and launches `ACTION_INSTALL_TO_WATCH`.
@@ -226,3 +404,62 @@ These remain free text but are stable enough for parsing and human logs.
    - `state=watch_terminal`
    - `state=session_finished reason=watch_terminal`
 7. Script exits success.
+
+## 8. Example Flow (Screenshot)
+
+1. User taps a phone UI action (or adb launches `REQUEST_WATCH_SCREENSHOT` intent with `SESSION_ID`).
+2. Phone logs `session_started` and `screenshot_request_started`.
+3. Phone sends `/request-screenshot` (optional JSON payload includes `request_id`).
+4. Watch captures screenshot and sends `/log-message` progress and terminal status lines.
+5. Watch publishes `/screenshot-export` with `screenshot_file` asset (and `request_id` when available).
+6. Phone receives asset, saves image locally, logs `screenshot_saved`, then:
+   - `state=session_finished reason=screenshot_saved`
+7. adb automation treats `reason=screenshot_saved` as success.
+
+## 9. Watch Screenshot Capture Capability Requirements
+
+The protocol additions above only define request/response transport. Actual screenshot
+capture on the watch is platform-constrained and may require additional watch-side
+capabilities depending on implementation strategy.
+
+### 9.1 No "simple screenshot permission" for third-party apps
+
+There is no normal/dangerous manifest permission that lets a regular third-party app
+silently capture arbitrary watch screens.
+
+### 9.2 Option A: Accessibility service screenshot API (recommended for unattended capture)
+
+Use `AccessibilityService.takeScreenshot(...)` (API 30+).
+
+Requirements on watch app:
+
+- Add an accessibility service component (separate from the Wear listener service)
+- Service must require `android.permission.BIND_ACCESSIBILITY_SERVICE`
+  - This is declared on the `<service>` component, not as a `<uses-permission>`
+- Accessibility service metadata must set screenshot capability:
+  - `android:canTakeScreenshot="true"`
+- User must explicitly enable the accessibility service in system settings
+
+Notes:
+
+- No new runtime dangerous permission is typically required just to call
+  `takeScreenshot(...)`
+- This is the only practical path for repeated adb-triggered captures without a consent
+  prompt per request (assuming the user has already enabled the accessibility service)
+
+### 9.3 Option B: MediaProjection (interactive/user-consent flow)
+
+Use `MediaProjectionManager.createScreenCaptureIntent()` + foreground service.
+
+Requirements on watch app (targetSdk 34+; current project targets 36):
+
+- `<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />`
+- `<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />`
+- A foreground service declared with `android:foregroundServiceType="mediaProjection"`
+- User consent before each projection session via screen-capture intent flow
+
+Notes:
+
+- Suitable for interactive phone/watch UI flows only
+- Not suitable for unattended adb automation because consent is required on the watch
+  for each session

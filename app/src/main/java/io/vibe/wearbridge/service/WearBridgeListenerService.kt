@@ -11,6 +11,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import io.vibe.wearbridge.core.BridgeState
+import io.vibe.wearbridge.protocol.CapabilityReport
 import io.vibe.wearbridge.protocol.CompanionInfo
 import io.vibe.wearbridge.protocol.RemoteAppInfo
 import io.vibe.wearbridge.protocol.WearProtocol
@@ -84,6 +85,25 @@ class WearBridgeListenerService : WearableListenerService() {
                     BridgeState.log("Watch companion ${info.versionName} (${info.versionCode})")
                 }.onFailure { error ->
                     BridgeState.log("Failed to decode companion response: ${error.message}")
+                }
+            }
+
+            WearProtocol.CHECK_CAPABILITIES_RESPONSE_PATH -> {
+                runCatching {
+                    val payload = String(messageEvent.data, Charsets.UTF_8)
+                    json.decodeFromString<CapabilityReport>(payload)
+                }.onSuccess { report ->
+                    BridgeState.setCapabilityReport(report)
+                    val screenshot = report.capabilities?.get("screenshot")
+                    if (screenshot != null) {
+                        BridgeState.log(
+                            "Watch caps screenshot: supported=${screenshot.supported} ready=${screenshot.ready} method=${screenshot.method ?: "unknown"}"
+                        )
+                    } else {
+                        BridgeState.log("Watch capability report received")
+                    }
+                }.onFailure { error ->
+                    BridgeState.log("Failed to decode capability response: ${error.message}")
                 }
             }
 

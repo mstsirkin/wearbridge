@@ -22,6 +22,9 @@ import com.google.android.gms.wearable.WearableListenerService
 import io.vibe.wearbridge.watch.core.PhoneNodeMessenger
 import io.vibe.wearbridge.watch.core.WatchBridgeState
 import io.vibe.wearbridge.watch.install.InstallResultReceiver
+import io.vibe.wearbridge.watch.protocol.CapabilityCheckRequest
+import io.vibe.wearbridge.watch.protocol.CapabilityReport
+import io.vibe.wearbridge.watch.protocol.CapabilityStatus
 import io.vibe.wearbridge.watch.protocol.CompanionInfo
 import io.vibe.wearbridge.watch.protocol.RemoteAppInfo
 import io.vibe.wearbridge.watch.protocol.WearProtocol
@@ -35,6 +38,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -80,6 +86,13 @@ class WearBridgeListenerService : WearableListenerService() {
 
             WearProtocol.CHECK_COMPANION_PATH -> {
                 handleCompanionCheck(messageEvent.sourceNodeId)
+            }
+
+            WearProtocol.CHECK_CAPABILITIES_PATH -> {
+                handleCapabilitiesCheck(
+                    sourceNodeId = messageEvent.sourceNodeId,
+                    payloadBytes = messageEvent.data
+                )
             }
 
             WearProtocol.REQUEST_APK_PATH -> {
@@ -157,6 +170,23 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
+    private suspend fun handleCapabilitiesCheck(sourceNodeId: String, payloadBytes: ByteArray) {
+        val request = parseCapabilityCheckRequest(payloadBytes)
+        runCatching {
+            val report = buildCapabilityReport(request)
+            val payload = json.encodeToString(report).toByteArray(Charsets.UTF_8)
+            PhoneNodeMessenger.sendMessageToNode(
+                context = this,
+                nodeId = sourceNodeId,
+                path = WearProtocol.CHECK_CAPABILITIES_RESPONSE_PATH,
+                payload = payload
+            )
+            WatchBridgeState.log("Capability report sent requestId=${request?.requestId ?: "none"}")
+        }.onFailure { error ->
+            WatchBridgeState.log("Capability check failed: ${error.message}")
+        }
+    }
+
     private suspend fun handleDeleteRequest(packageName: String) {
         if (packageName.isBlank()) {
             PhoneNodeMessenger.safeLogToPhone(
@@ -221,6 +251,52 @@ class WearBridgeListenerService : WearableListenerService() {
             )
             WatchBridgeState.log("Export failed for $packageName: ${error.message}")
         }
+    }
+
+    private fun parseCapabilityCheckRequest(payloadBytes: ByteArray): CapabilityCheckRequest? {
+        if (payloadBytes.isEmpty()) return null
+        val payload = payloadBytes.decodeUtf8().trim()
+        if (payload.isEmpty()) return null
+        return runCatching {
+            json.decodeFromString<CapabilityCheckRequest>(payload)
+        }.getOrElse {
+            WatchBridgeState.log("Capability request payload decode failed; using defaults")
+            null
+        }
+    }
+
+    private fun buildCapabilityReport(request: CapabilityCheckRequest?): CapabilityReport {
+        val requested = request?.features?.toSet().orEmpty()
+        val includeScreenshot = requested.isEmpty() || "screenshot" in requested
+
+        val screenshotStatus = if (includeScreenshot) {
+            CapabilityStatus(
+                supported = false,
+                ready = false,
+                method = "none",
+                missingPermissions = emptyList(),
+                missingRequirements = listOf("feature_not_built"),
+                requiredUserActions = listOf("update_watch_app"),
+                details = buildJsonObject {
+                    put("api_level", Build.VERSION.SDK_INT)
+                    put("watch_sdk_int", Build.VERSION.SDK_INT)
+                }
+            )
+        } else {
+            null
+        }
+
+        val capabilityMap = buildMap<String, CapabilityStatus> {
+            if (screenshotStatus != null) {
+                put("screenshot", screenshotStatus)
+            }
+        }
+
+        return CapabilityReport(
+            requestId = request?.requestId,
+            protocolVersion = 1,
+            capabilities = capabilityMap
+        )
     }
 
     private suspend fun handleInstallPayload(dataItem: DataItem) {

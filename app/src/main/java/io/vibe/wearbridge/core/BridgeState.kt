@@ -1,6 +1,7 @@
 package io.vibe.wearbridge.core
 
 import android.util.Log
+import io.vibe.wearbridge.protocol.CapabilityReport
 import io.vibe.wearbridge.protocol.CompanionInfo
 import io.vibe.wearbridge.protocol.RemoteAppInfo
 import io.vibe.wearbridge.protocol.WearAppRecord
@@ -31,6 +32,9 @@ object BridgeState {
 
     private val _companionInfo = MutableStateFlow<CompanionInfo?>(null)
     val companionInfo: StateFlow<CompanionInfo?> = _companionInfo.asStateFlow()
+
+    private val _capabilityReport = MutableStateFlow<CapabilityReport?>(null)
+    val capabilityReport: StateFlow<CapabilityReport?> = _capabilityReport.asStateFlow()
 
     fun log(message: String) {
         emit(message, null)
@@ -129,6 +133,10 @@ object BridgeState {
 
     fun setCompanionInfo(info: CompanionInfo) {
         _companionInfo.value = info
+    }
+
+    fun setCapabilityReport(report: CapabilityReport) {
+        _capabilityReport.value = report
     }
 
     private fun emit(message: String, _sessionId: String?) {

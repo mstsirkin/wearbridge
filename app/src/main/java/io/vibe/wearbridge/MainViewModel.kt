@@ -11,10 +11,13 @@ import io.vibe.wearbridge.core.UploadProgress
 import io.vibe.wearbridge.core.WearBridgeClient
 import io.vibe.wearbridge.files.FileSelection
 import io.vibe.wearbridge.files.SelectedFile
+import io.vibe.wearbridge.protocol.CapabilityCheckRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val client = WearBridgeClient(application)
@@ -77,6 +80,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 BridgeState.log("No watch connected for companion check")
             } else {
                 BridgeState.log("Companion check sent to $sent watch node(s)")
+                probeCapabilitiesWithFallback()
             }
         }
     }
@@ -300,6 +304,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             BridgeState.logSessionState(sessionId, "upload_progress", detail)
         } else {
             BridgeState.log("Upload progress: $detail")
+        }
+    }
+
+    private suspend fun probeCapabilitiesWithFallback() {
+        val requestId = "caps-${System.currentTimeMillis()}"
+        val request = CapabilityCheckRequest(
+            requestId = requestId,
+            features = listOf("screenshot")
+        )
+
+        val sent = runCatching {
+            client.requestCapabilities(request)
+        }.getOrElse { error ->
+            BridgeState.log("Capability probe failed to send: ${error.message}")
+            return
+        }
+
+        if (sent == 0) {
+            BridgeState.log("Capability probe skipped: no watch connected")
+            return
+        }
+
+        BridgeState.log("Capability probe sent to $sent watch node(s)")
+
+        val matched = withTimeoutOrNull(1500) {
+            BridgeState.capabilityReport.first { it?.requestId == requestId }
+        }
+
+        if (matched == null) {
+            BridgeState.log("Capability report unavailable (legacy watch or timeout)")
         }
     }
 

@@ -8,12 +8,15 @@ import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import io.vibe.wearbridge.protocol.CapabilityCheckRequest
 import io.vibe.wearbridge.files.SelectedFile
 import io.vibe.wearbridge.protocol.WearProtocol
 import io.vibe.wearbridge.protocol.indexedApkAssetKey
 import io.vibe.wearbridge.protocol.indexedApkNameKey
 import io.vibe.wearbridge.protocol.indexedApkSizeKey
 import kotlinx.coroutines.tasks.await
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 data class UploadProgress(
     val percent: Int,
@@ -23,6 +26,7 @@ data class UploadProgress(
 
 class WearBridgeClient(context: Context) {
     private val appContext = context.applicationContext
+    private val json = Json { encodeDefaults = false }
 
     private val messageClient: MessageClient = Wearable.getMessageClient(appContext)
     private val nodeClient: NodeClient = Wearable.getNodeClient(appContext)
@@ -44,6 +48,15 @@ class WearBridgeClient(context: Context) {
 
     suspend fun requestDelete(packageName: String): Int {
         return sendMessageToAllNodes(WearProtocol.DELETE_APP_PATH, packageName.toByteArray(Charsets.UTF_8))
+    }
+
+    suspend fun requestCapabilities(request: CapabilityCheckRequest? = null): Int {
+        val payload = if (request == null) {
+            ByteArray(0)
+        } else {
+            json.encodeToString(request).toByteArray(Charsets.UTF_8)
+        }
+        return sendMessageToAllNodes(WearProtocol.CHECK_CAPABILITIES_PATH, payload)
     }
 
     suspend fun sendInstallData(
