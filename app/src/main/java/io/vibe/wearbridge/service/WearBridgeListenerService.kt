@@ -42,9 +42,17 @@ class WearBridgeListenerService : WearableListenerService() {
         frozenEvents.forEach { event ->
             if (event.type != DataEvent.TYPE_CHANGED) return@forEach
             val path = event.dataItem.uri.path ?: return@forEach
-            if (path == WearProtocol.EXPORTED_APK_PATH) {
-                serviceScope.launch {
-                    saveExportedArchive(event.dataItem)
+            when (path) {
+                WearProtocol.EXPORTED_APK_PATH -> {
+                    serviceScope.launch {
+                        saveExportedArchive(event.dataItem)
+                    }
+                }
+
+                WearProtocol.SCREENSHOT_EXPORT_PATH -> {
+                    serviceScope.launch {
+                        saveWatchScreenshot(event.dataItem)
+                    }
                 }
             }
         }
@@ -160,12 +168,87 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
+    private suspend fun saveWatchScreenshot(dataItem: com.google.android.gms.wearable.DataItem) {
+        val dataMap = DataMapItem.fromDataItem(dataItem).dataMap
+        val asset = dataMap.getAsset(WearProtocol.KEY_SCREENSHOT_FILE_ASSET)
+        val requestId = dataMap.getString(WearProtocol.KEY_REQUEST_ID)
+        val mimeType = dataMap.getString(WearProtocol.KEY_MIME_TYPE).orEmpty().ifBlank { "image/png" }
+        val captureTimestamp = dataMap.getLong(WearProtocol.KEY_CAPTURE_TIMESTAMP)
+
+        if (asset == null) {
+            BridgeState.log("Screenshot payload missing screenshot_file asset")
+            BridgeState.onScreenshotSaveFailed(
+                requestId = requestId,
+                details = "error=missing_screenshot_file_asset"
+            )
+            return
+        }
+
+        val dataClient = Wearable.getDataClient(this)
+        BridgeState.onScreenshotReceived(
+            requestId = requestId,
+            details = "mime=${sanitizeLogToken(mimeType)}"
+        )
+
+        runCatching {
+            val input = dataClient.getFdForAsset(asset).await().inputStream
+            val extension = when (mimeType.lowercase(Locale.US)) {
+                "image/jpeg", "image/jpg" -> "jpg"
+                "image/webp" -> "webp"
+                else -> "png"
+            }
+            val fileName = "watch-screenshot-${if (captureTimestamp > 0L) captureTimestamp else System.currentTimeMillis()}.$extension"
+
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(
+                        MediaStore.MediaColumns.RELATIVE_PATH,
+                        Environment.DIRECTORY_PICTURES + "/WearBridge"
+                    )
+                }
+            }
+
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                ?: error("Unable to create MediaStore entry")
+
+            contentResolver.openOutputStream(uri)?.use { output ->
+                input.use { source ->
+                    source.copyTo(output)
+                }
+            } ?: error("Unable to open output stream")
+
+            dataClient.deleteDataItems(dataItem.uri).await()
+
+            BridgeState.log("Saved watch screenshot: $fileName")
+            BridgeState.onScreenshotSaved(
+                requestId = requestId,
+                fileName = fileName,
+                uriText = uri.toString()
+            )
+        }.onFailure { error ->
+            BridgeState.log("Failed to save watch screenshot: ${error.message}")
+            BridgeState.onScreenshotSaveFailed(
+                requestId = requestId,
+                details = "error=${sanitizeLogToken(error.message ?: "save_failed")}"
+            )
+        }
+    }
+
     private fun sanitizeFileComponent(raw: String): String {
         return raw
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
             .trim('_')
             .ifBlank { "wear-export" }
             .lowercase(Locale.US)
+    }
+
+    private fun sanitizeLogToken(raw: String): String {
+        return raw
+            .replace(Regex("\\s+"), "_")
+            .trim()
+            .ifBlank { "unknown" }
     }
 
     override fun onDestroy() {

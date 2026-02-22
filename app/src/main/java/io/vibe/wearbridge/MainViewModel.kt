@@ -12,6 +12,7 @@ import io.vibe.wearbridge.core.WearBridgeClient
 import io.vibe.wearbridge.files.FileSelection
 import io.vibe.wearbridge.files.SelectedFile
 import io.vibe.wearbridge.protocol.CapabilityCheckRequest
+import io.vibe.wearbridge.protocol.ScreenshotRequest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -83,6 +84,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 BridgeState.log("Companion check sent to $sent watch node(s)")
                 probeCapabilitiesWithFallback()
             }
+        }
+    }
+
+    fun requestWatchScreenshot() {
+        launchBusy {
+            sendScreenshotRequest(
+                sessionId = null,
+                requestId = null,
+                source = "phone_ui"
+            )
+        }
+    }
+
+    fun requestWatchScreenshotFromIntent(
+        sessionId: String?,
+        requestId: String?,
+        source: String?
+    ) {
+        launchBusy {
+            sendScreenshotRequest(
+                sessionId = sessionId?.trim()?.takeIf { it.isNotEmpty() },
+                requestId = requestId?.trim()?.takeIf { it.isNotEmpty() },
+                source = source?.trim()?.takeIf { it.isNotEmpty() } ?: "adb"
+            )
         }
     }
 
@@ -336,6 +361,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (matched == null) {
             BridgeState.log("Capability report unavailable (legacy watch or timeout)")
         }
+    }
+
+    private suspend fun sendScreenshotRequest(
+        sessionId: String?,
+        requestId: String?,
+        source: String?
+    ) {
+        val normalizedSessionId = sessionId?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedRequestId = (requestId ?: normalizedSessionId)?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedSource = source?.trim()?.takeIf { it.isNotEmpty() }
+
+        if (normalizedSessionId != null) {
+            BridgeState.beginScreenshotSession(
+                sessionId = normalizedSessionId,
+                requestId = normalizedRequestId,
+                metadata = normalizedSource?.let { "source=$it" }
+            )
+            BridgeState.logSessionState(
+                normalizedSessionId,
+                "screenshot_request_started",
+                normalizedRequestId?.let { "request_id=$it" }
+            )
+        }
+
+        val request = ScreenshotRequest(
+            requestId = normalizedRequestId,
+            source = normalizedSource
+        )
+
+        val sent = runCatching {
+            client.requestScreenshot(request)
+        }.getOrElse { error ->
+            if (normalizedSessionId != null) {
+                BridgeState.onScreenshotRequestFailed(
+                    reasonCode = "send_exception",
+                    details = "error=${error.message ?: "unknown"}",
+                    requestId = normalizedRequestId
+                )
+            } else {
+                BridgeState.log("Screenshot request failed: ${error.message}")
+            }
+            return
+        }
+
+        if (sent == 0) {
+            if (normalizedSessionId != null) {
+                BridgeState.onScreenshotRequestFailed(
+                    reasonCode = "no_watch_connected",
+                    details = null,
+                    requestId = normalizedRequestId
+                )
+            } else {
+                BridgeState.log("No watch connected for screenshot request")
+            }
+            return
+        }
+
+        if (normalizedSessionId != null) {
+            BridgeState.onScreenshotRequestSent(
+                requestId = normalizedRequestId,
+                sentNodes = sent
+            )
+        }
+        BridgeState.log("Screenshot request sent to $sent watch node(s)")
     }
 
     private fun launchBusy(block: suspend () -> Unit) {

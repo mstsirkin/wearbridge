@@ -19,10 +19,19 @@ object BridgeState {
     private const val LOG_LIMIT = 300
     private const val LOG_TAG = "WearBridge"
 
+    private enum class SessionKind {
+        INSTALL,
+        SCREENSHOT
+    }
+
     private val chunkMutex = Mutex()
     private val chunkBuffer = mutableListOf<RemoteAppInfo>()
     @Volatile
-    private var activeInstallSessionId: String? = null
+    private var activeSessionId: String? = null
+    @Volatile
+    private var activeSessionKind: SessionKind? = null
+    @Volatile
+    private var activeScreenshotRequestId: String? = null
 
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
@@ -41,13 +50,31 @@ object BridgeState {
     }
 
     fun beginInstallSession(sessionId: String, metadata: String? = null) {
-        activeInstallSessionId = sessionId
-        val suffix = metadata?.let { " $it" } ?: ""
-        emit("session=$sessionId state=session_started$suffix", sessionId)
+        beginSession(
+            sessionId = sessionId,
+            kind = SessionKind.INSTALL,
+            screenshotRequestId = null,
+            metadata = metadata
+        )
+    }
+
+    fun beginScreenshotSession(
+        sessionId: String,
+        requestId: String? = null,
+        metadata: String? = null
+    ) {
+        val requestPart = requestId?.takeIf { it.isNotBlank() }?.let { "request_id=$it" }
+        val combinedMetadata = listOfNotNull(metadata, requestPart).joinToString(" ").ifBlank { null }
+        beginSession(
+            sessionId = sessionId,
+            kind = SessionKind.SCREENSHOT,
+            screenshotRequestId = requestId?.takeIf { it.isNotBlank() },
+            metadata = combinedMetadata
+        )
     }
 
     fun isSessionActive(sessionId: String): Boolean {
-        return activeInstallSessionId == sessionId
+        return activeSessionId == sessionId
     }
 
     fun logSessionState(sessionId: String, state: String, details: String? = null) {
@@ -55,10 +82,100 @@ object BridgeState {
         emit("session=$sessionId state=$state$suffix", sessionId)
     }
 
-    fun endInstallSession(sessionId: String? = activeInstallSessionId, reason: String? = null) {
+    fun endInstallSession(sessionId: String? = activeSessionId, reason: String? = null) {
+        endSession(sessionId = sessionId, reason = reason)
+    }
+
+    fun endScreenshotSession(reason: String, requestId: String? = null) {
+        val sessionId = activeSessionId ?: return
+        if (activeSessionKind != SessionKind.SCREENSHOT) return
+        if (!matchesActiveScreenshotRequest(requestId)) return
+        endSession(sessionId = sessionId, reason = reason)
+    }
+
+    fun onScreenshotRequestSent(requestId: String? = null, sentNodes: Int? = null) {
+        val sessionId = activeSessionId ?: return
+        if (activeSessionKind != SessionKind.SCREENSHOT) return
+        if (!matchesActiveScreenshotRequest(requestId)) return
+
+        val details = buildString {
+            requestId?.takeIf { it.isNotBlank() }?.let {
+                append("request_id=")
+                append(it)
+            }
+            sentNodes?.let {
+                if (isNotEmpty()) append(' ')
+                append("nodes=")
+                append(it)
+            }
+        }.ifBlank { null }
+        logSessionState(sessionId, "screenshot_request_sent", details)
+    }
+
+    fun onScreenshotRequestFailed(reasonCode: String, details: String? = null, requestId: String? = null) {
+        val sessionId = activeSessionId ?: return
+        if (activeSessionKind != SessionKind.SCREENSHOT) return
+        if (!matchesActiveScreenshotRequest(requestId)) return
+        val combined = listOfNotNull(
+            requestId?.takeIf { it.isNotBlank() }?.let { "request_id=$it" },
+            reasonCode.takeIf { it.isNotBlank() }?.let { "code=$it" },
+            details
+        ).joinToString(" ").ifBlank { null }
+        logSessionState(sessionId, "screenshot_request_failed", combined)
+        endSession(sessionId = sessionId, reason = "screenshot_request_failed")
+    }
+
+    fun onScreenshotReceived(requestId: String? = null, details: String? = null) {
+        val sessionId = activeSessionId ?: return
+        if (activeSessionKind != SessionKind.SCREENSHOT) return
+        if (!matchesActiveScreenshotRequest(requestId)) return
+        val combined = listOfNotNull(
+            requestId?.takeIf { it.isNotBlank() }?.let { "request_id=$it" },
+            details
+        ).joinToString(" ").ifBlank { null }
+        logSessionState(sessionId, "screenshot_received", combined)
+    }
+
+    fun onScreenshotSaved(
+        requestId: String? = null,
+        fileName: String? = null,
+        uriText: String? = null
+    ) {
+        val sessionId = activeSessionId ?: return
+        if (activeSessionKind != SessionKind.SCREENSHOT) return
+        if (!matchesActiveScreenshotRequest(requestId)) return
+        val details = listOfNotNull(
+            requestId?.takeIf { it.isNotBlank() }?.let { "request_id=$it" },
+            fileName?.takeIf { it.isNotBlank() }?.let { "file=$it" },
+            uriText?.takeIf { it.isNotBlank() }?.let { "uri=$it" }
+        ).joinToString(" ").ifBlank { null }
+        logSessionState(sessionId, "screenshot_saved", details)
+        endSession(sessionId = sessionId, reason = "screenshot_saved")
+    }
+
+    fun onScreenshotSaveFailed(requestId: String? = null, details: String? = null) {
+        val sessionId = activeSessionId ?: return
+        if (activeSessionKind != SessionKind.SCREENSHOT) return
+        if (!matchesActiveScreenshotRequest(requestId)) return
+        val combined = listOfNotNull(
+            requestId?.takeIf { it.isNotBlank() }?.let { "request_id=$it" },
+            details
+        ).joinToString(" ").ifBlank { null }
+        logSessionState(sessionId, "screenshot_save_failed", combined)
+        endSession(sessionId = sessionId, reason = "screenshot_save_failed")
+    }
+
+    fun activeScreenshotRequestId(): String? {
+        if (activeSessionKind != SessionKind.SCREENSHOT) return null
+        return activeScreenshotRequestId
+    }
+
+    private fun endSession(sessionId: String?, reason: String? = null) {
         if (sessionId == null) return
-        if (activeInstallSessionId == sessionId) {
-            activeInstallSessionId = null
+        if (activeSessionId == sessionId) {
+            activeSessionId = null
+            activeSessionKind = null
+            activeScreenshotRequestId = null
         }
         val suffix = reason?.let { " reason=$it" } ?: ""
         emit("session=$sessionId state=session_finished$suffix", sessionId)
@@ -66,12 +183,26 @@ object BridgeState {
 
     fun logWatchMessage(message: String) {
         val clean = message.replace('\n', ' ').replace('\r', ' ')
-        val sessionId = activeInstallSessionId
+        val sessionId = activeSessionId
         if (sessionId != null) {
             emit("session=$sessionId watch=\"$clean\"", sessionId)
             if (isLikelyTerminalWatchMessage(clean)) {
                 logSessionState(sessionId, "watch_terminal")
-                endInstallSession(sessionId, "watch_terminal")
+                when (activeSessionKind) {
+                    SessionKind.INSTALL -> {
+                        endSession(sessionId, "watch_terminal")
+                    }
+                    SessionKind.SCREENSHOT -> {
+                        if (isScreenshotWatchFailure(clean)) {
+                            onScreenshotRequestFailed(
+                                reasonCode = "watch_terminal_failure",
+                                details = "message=${sanitizeSessionValue(clean)}",
+                                requestId = activeScreenshotRequestId
+                            )
+                        }
+                    }
+                    null -> Unit
+                }
             }
         } else {
             emit("Watch: $clean", null)
@@ -137,6 +268,39 @@ object BridgeState {
 
     fun setCapabilityReport(report: CapabilityReport) {
         _capabilityReport.value = report
+    }
+
+    private fun beginSession(
+        sessionId: String,
+        kind: SessionKind,
+        screenshotRequestId: String?,
+        metadata: String?
+    ) {
+        activeSessionId = sessionId
+        activeSessionKind = kind
+        activeScreenshotRequestId = screenshotRequestId
+        val suffix = metadata?.let { " $it" } ?: ""
+        emit("session=$sessionId state=session_started$suffix", sessionId)
+    }
+
+    private fun matchesActiveScreenshotRequest(requestId: String?): Boolean {
+        if (activeSessionKind != SessionKind.SCREENSHOT) return false
+        val activeRequestId = activeScreenshotRequestId
+        if (activeRequestId.isNullOrBlank() || requestId.isNullOrBlank()) return true
+        return activeRequestId == requestId
+    }
+
+    private fun isScreenshotWatchFailure(message: String): Boolean {
+        val value = message.lowercase(Locale.ROOT)
+        return value.contains("screenshot_status") && value.contains("status_failure")
+    }
+
+    private fun sanitizeSessionValue(raw: String): String {
+        return raw
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .replace('"', '\'')
+            .trim()
     }
 
     private fun emit(message: String, _sessionId: String?) {

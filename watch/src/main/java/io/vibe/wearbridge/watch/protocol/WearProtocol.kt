@@ -11,6 +11,8 @@ object WearProtocol {
 
     const val REQUEST_APK_PATH = "/request-apk"
     const val EXPORTED_APK_PATH = "/apk-export"
+    const val REQUEST_SCREENSHOT_PATH = "/request-screenshot"
+    const val SCREENSHOT_EXPORT_PATH = "/screenshot-export"
 
     const val APP_LIST_START_PATH = "/app-list-start"
     const val APP_LIST_CHUNK_PATH = "/app-list-chunk"
@@ -27,6 +29,12 @@ object WearProtocol {
     const val KEY_APP_LABEL = "app_label"
     const val KEY_APK_COUNT = "apk_count"
     const val KEY_APK_FILE_ASSET = "apk_file"
+    const val KEY_SCREENSHOT_FILE_ASSET = "screenshot_file"
+    const val KEY_REQUEST_ID = "request_id"
+    const val KEY_MIME_TYPE = "mime_type"
+    const val KEY_CAPTURE_TIMESTAMP = "capture_timestamp"
+    const val KEY_IMAGE_WIDTH = "width"
+    const val KEY_IMAGE_HEIGHT = "height"
 }
 
 fun indexedApkAssetKey(index: Int): String = "apk_$index"
@@ -37,6 +45,13 @@ fun indexedApkSizeKey(index: Int): String = "apk_size_$index"
 data class CompanionInfo(
     val versionName: String,
     val versionCode: Int
+)
+
+@Serializable
+data class ScreenshotRequest(
+    @SerialName("request_id")
+    val requestId: String? = null,
+    val source: String? = null
 )
 
 @Serializable

@@ -69,11 +69,14 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     companion object {
         const val ACTION_INSTALL_TO_WATCH = "io.vibe.wearbridge.action.INSTALL_TO_WATCH"
+        const val ACTION_REQUEST_WATCH_SCREENSHOT = "io.vibe.wearbridge.action.REQUEST_WATCH_SCREENSHOT"
         const val EXTRA_AUTO_SEND = "io.vibe.wearbridge.extra.AUTO_SEND"
         const val EXTRA_PACKAGE_NAME = "io.vibe.wearbridge.extra.PACKAGE_NAME"
         const val EXTRA_FILE_COUNT = "io.vibe.wearbridge.extra.FILE_COUNT"
         const val EXTRA_FILE_URI_PREFIX = "io.vibe.wearbridge.extra.FILE_URI_"
         const val EXTRA_SESSION_ID = "io.vibe.wearbridge.extra.SESSION_ID"
+        const val EXTRA_REQUEST_ID = "io.vibe.wearbridge.extra.REQUEST_ID"
+        const val EXTRA_SOURCE = "io.vibe.wearbridge.extra.SOURCE"
     }
 
     private val viewModel: MainViewModel by viewModels()
@@ -135,7 +138,8 @@ class MainActivity : ComponentActivity() {
                                 ActionBar(
                                     onRefreshNodes = viewModel::refreshNodes,
                                     onSync = viewModel::requestSync,
-                                    onCheckCompanion = viewModel::checkCompanion
+                                    onCheckCompanion = viewModel::checkCompanion,
+                                    onScreenshot = viewModel::requestWatchScreenshot
                                 )
                             }
 
@@ -212,6 +216,15 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(intent: Intent?) {
         val payload = intent ?: return
+        if (payload.action == ACTION_REQUEST_WATCH_SCREENSHOT) {
+            viewModel.requestWatchScreenshotFromIntent(
+                sessionId = payload.getStringExtra(EXTRA_SESSION_ID),
+                requestId = payload.getStringExtra(EXTRA_REQUEST_ID),
+                source = payload.getStringExtra(EXTRA_SOURCE)
+            )
+            return
+        }
+
         val uris = extractIncomingUris(payload)
         val autoSend = payload.getBooleanExtra(
             EXTRA_AUTO_SEND,
@@ -351,7 +364,8 @@ private fun StatusCard(
 private fun ActionBar(
     onRefreshNodes: () -> Unit,
     onSync: () -> Unit,
-    onCheckCompanion: () -> Unit
+    onCheckCompanion: () -> Unit,
+    onScreenshot: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -362,6 +376,7 @@ private fun ActionBar(
         OutlinedButton(onClick = onRefreshNodes) { Text("Refresh nodes") }
         Button(onClick = onSync) { Text("Sync apps") }
         OutlinedButton(onClick = onCheckCompanion) { Text("Check companion") }
+        OutlinedButton(onClick = onScreenshot) { Text("Screenshot") }
     }
 }
 

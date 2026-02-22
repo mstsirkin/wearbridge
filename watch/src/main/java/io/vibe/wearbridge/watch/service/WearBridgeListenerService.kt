@@ -27,10 +27,13 @@ import io.vibe.wearbridge.watch.protocol.CapabilityReport
 import io.vibe.wearbridge.watch.protocol.CapabilityStatus
 import io.vibe.wearbridge.watch.protocol.CompanionInfo
 import io.vibe.wearbridge.watch.protocol.RemoteAppInfo
+import io.vibe.wearbridge.watch.protocol.ScreenshotRequest
 import io.vibe.wearbridge.watch.protocol.WearProtocol
 import io.vibe.wearbridge.watch.protocol.indexedApkAssetKey
 import io.vibe.wearbridge.watch.protocol.indexedApkNameKey
 import io.vibe.wearbridge.watch.protocol.indexedApkSizeKey
+import io.vibe.wearbridge.watch.screenshot.ScreenshotCaptureResult
+import io.vibe.wearbridge.watch.screenshot.WatchScreenshotController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -93,6 +96,10 @@ class WearBridgeListenerService : WearableListenerService() {
                     sourceNodeId = messageEvent.sourceNodeId,
                     payloadBytes = messageEvent.data
                 )
+            }
+
+            WearProtocol.REQUEST_SCREENSHOT_PATH -> {
+                handleScreenshotRequest(messageEvent.data)
             }
 
             WearProtocol.REQUEST_APK_PATH -> {
@@ -187,6 +194,68 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
+    private suspend fun handleScreenshotRequest(payloadBytes: ByteArray) {
+        val request = parseScreenshotRequest(payloadBytes)
+        val requestId = request?.requestId?.trim()?.takeIf { it.isNotEmpty() }
+        val requestToken = requestId ?: "none"
+
+        PhoneNodeMessenger.safeLogToPhone(
+            context = this,
+            message = "SCREENSHOT_PROGRESS phase=request_received request_id=$requestToken"
+        )
+
+        when (val result = WatchScreenshotController.capture()) {
+            is ScreenshotCaptureResult.Failure -> {
+                PhoneNodeMessenger.safeLogToPhone(
+                    context = this,
+                    message = "SCREENSHOT_STATUS status_failure request_id=$requestToken code=${sanitizeLogValue(result.code)} message=${sanitizeLogValue(result.message)}"
+                )
+                WatchBridgeState.log("Screenshot request failed requestId=$requestToken code=${result.code}")
+            }
+
+            is ScreenshotCaptureResult.Success -> {
+                runCatching {
+                    val payload = result.payload
+                    val putDataMapRequest = PutDataMapRequest.create(WearProtocol.SCREENSHOT_EXPORT_PATH)
+                    putDataMapRequest.dataMap.putAsset(
+                        WearProtocol.KEY_SCREENSHOT_FILE_ASSET,
+                        Asset.createFromBytes(payload.pngBytes)
+                    )
+                    requestId?.let {
+                        putDataMapRequest.dataMap.putString(WearProtocol.KEY_REQUEST_ID, it)
+                    }
+                    putDataMapRequest.dataMap.putString(WearProtocol.KEY_MIME_TYPE, "image/png")
+                    putDataMapRequest.dataMap.putLong(
+                        WearProtocol.KEY_CAPTURE_TIMESTAMP,
+                        payload.captureTimestampMillis
+                    )
+                    putDataMapRequest.dataMap.putInt(WearProtocol.KEY_IMAGE_WIDTH, payload.width)
+                    putDataMapRequest.dataMap.putInt(WearProtocol.KEY_IMAGE_HEIGHT, payload.height)
+                    // Force DataItem change even if two screenshots are identical.
+                    putDataMapRequest.dataMap.putLong("screenshot_nonce", System.currentTimeMillis())
+
+                    Wearable.getDataClient(this)
+                        .putDataItem(putDataMapRequest.asPutDataRequest().setUrgent())
+                        .await()
+
+                    PhoneNodeMessenger.safeLogToPhone(
+                        context = this,
+                        message = "SCREENSHOT_STATUS status_success request_id=$requestToken mime=image/png message=ready"
+                    )
+                    WatchBridgeState.log(
+                        "Screenshot export queued requestId=$requestToken size=${payload.pngBytes.size}"
+                    )
+                }.onFailure { error ->
+                    PhoneNodeMessenger.safeLogToPhone(
+                        context = this,
+                        message = "SCREENSHOT_STATUS status_failure request_id=$requestToken code=capture_failed message=${sanitizeLogValue(error.message ?: "screenshot_export_failed")}"
+                    )
+                    WatchBridgeState.log("Screenshot export failed requestId=$requestToken: ${error.message}")
+                }
+            }
+        }
+    }
+
     private suspend fun handleDeleteRequest(packageName: String) {
         if (packageName.isBlank()) {
             PhoneNodeMessenger.safeLogToPhone(
@@ -265,21 +334,48 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
+    private fun parseScreenshotRequest(payloadBytes: ByteArray): ScreenshotRequest? {
+        if (payloadBytes.isEmpty()) return null
+        val payload = payloadBytes.decodeUtf8().trim()
+        if (payload.isEmpty()) return null
+        return runCatching {
+            json.decodeFromString<ScreenshotRequest>(payload)
+        }.getOrElse {
+            WatchBridgeState.log("Screenshot request payload decode failed; using defaults")
+            null
+        }
+    }
+
     private fun buildCapabilityReport(request: CapabilityCheckRequest?): CapabilityReport {
         val requested = request?.features?.toSet().orEmpty()
         val includeScreenshot = requested.isEmpty() || "screenshot" in requested
 
         val screenshotStatus = if (includeScreenshot) {
+            val supported = WatchScreenshotController.supportsScreenshot()
+            val ready = WatchScreenshotController.isReady()
+            val missingRequirements = buildList {
+                if (!supported) {
+                    add("api_unsupported")
+                } else if (!ready) {
+                    add("accessibility_service_disabled")
+                }
+            }
+            val requiredActions = buildList {
+                if (supported && !ready) {
+                    add("enable_accessibility_service")
+                }
+            }
             CapabilityStatus(
-                supported = false,
-                ready = false,
-                method = "none",
+                supported = supported,
+                ready = ready,
+                method = WatchScreenshotController.method(),
                 missingPermissions = emptyList(),
-                missingRequirements = listOf("feature_not_built"),
-                requiredUserActions = listOf("update_watch_app"),
+                missingRequirements = missingRequirements,
+                requiredUserActions = requiredActions,
                 details = buildJsonObject {
                     put("api_level", Build.VERSION.SDK_INT)
                     put("watch_sdk_int", Build.VERSION.SDK_INT)
+                    put("accessibility_service_ready", ready)
                 }
             )
         } else {
