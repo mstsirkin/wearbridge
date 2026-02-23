@@ -1,13 +1,9 @@
-# WearBridge (clean-room phone + watch stack)
-
-This project is a fresh implementation under `/workspaces/wearbridge-demo-7f3c`.
-It does **not** reuse source code from the existing `wearload` app.
+# WearBridge (phone + watch stack)
 
 ## Current scope
 
 - Phone app (`:wearbridge-phone`)
 - Watch companion app (`:wearbridge-watch`)
-- WearLoad-compatible protocol on both sides
 - Core flows implemented end-to-end:
   - Request watch app sync
   - Receive chunked watch app list
@@ -57,7 +53,6 @@ Data layer paths and keys:
 ## Build
 
 ```bash
-cd /workspaces/wearbridge-demo-7f3c
 ./gradlew :wearbridge-phone:assembleDebug :wearbridge-watch:assembleDebug
 ```
 
