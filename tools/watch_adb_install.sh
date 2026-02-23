@@ -39,7 +39,7 @@ Options:
 
 Examples:
   $(basename "$0") app-release.apk
-  $(basename "$0") -s NRT8R8KRCUJV6XSO app-release.apk
+  $(basename "$0") -s VQ92H7L1XK4M app-release.apk
   $(basename "$0") watchface.apks
   $(basename "$0") --package com.example.app split_bundle.zip
 USAGE

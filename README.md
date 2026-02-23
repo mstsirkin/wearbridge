@@ -1,6 +1,6 @@
 # WearBridge (clean-room phone + watch stack)
 
-This project is a fresh implementation under `/scm/vibe/watchadmin/wearbridge`.
+This project is a fresh implementation under `/workspaces/wearbridge-demo-7f3c`.
 It does **not** reuse source code from the existing `wearload` app.
 
 ## Current scope
@@ -57,7 +57,7 @@ Data layer paths and keys:
 ## Build
 
 ```bash
-cd /scm/vibe/watchadmin/wearbridge
+cd /workspaces/wearbridge-demo-7f3c
 ./gradlew :wearbridge-phone:assembleDebug :wearbridge-watch:assembleDebug
 ```
 
@@ -171,7 +171,7 @@ The script:
 Command:
 
 ```bash
-cd /scm/vibe/watchadmin/wearbridge
+cd /workspaces/wearbridge-demo-7f3c
 ./tools/watch_adb_install.sh -s <PHONE_SERIAL> <artifact>
 ```
 
@@ -185,7 +185,7 @@ Examples:
 
 ```bash
 ./tools/watch_adb_install.sh app-release.apk
-./tools/watch_adb_install.sh -s NRT8R8KRCUJV6XSO app-release.apk
+./tools/watch_adb_install.sh -s VQ92H7L1XK4M app-release.apk
 ./tools/watch_adb_install.sh watchface.apks
 ./tools/watch_adb_install.sh --package com.example.app split_bundle.zip
 ./tools/watch_adb_install.sh --no-auto-send app-release.apk
@@ -221,7 +221,7 @@ the phone app and save the image on the phone.
 Command:
 
 ```bash
-cd /scm/vibe/watchadmin/wearbridge
+cd /workspaces/wearbridge-demo-7f3c
 ./tools/watch_adb_screenshot.sh -s <PHONE_SERIAL>
 ```
 
@@ -229,7 +229,7 @@ Examples:
 
 ```bash
 ./tools/watch_adb_screenshot.sh
-./tools/watch_adb_screenshot.sh -s NRT8R8KRCUJV6XSO
+./tools/watch_adb_screenshot.sh -s VQ92H7L1XK4M
 ./tools/watch_adb_screenshot.sh --poll-seconds 60
 ./tools/watch_adb_screenshot.sh --request-id demo-shot-001
 ./tools/watch_adb_screenshot.sh --no-poll
