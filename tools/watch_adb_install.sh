@@ -9,6 +9,7 @@ EXTRA_PACKAGE_NAME="io.vibe.wearbridge.extra.PACKAGE_NAME"
 EXTRA_FILE_COUNT="io.vibe.wearbridge.extra.FILE_COUNT"
 EXTRA_FILE_URI_PREFIX="io.vibe.wearbridge.extra.FILE_URI_"
 EXTRA_SESSION_ID="io.vibe.wearbridge.extra.SESSION_ID"
+EXTRA_PASSWORD="io.vibe.wearbridge.extra.PASSWORD"
 APP_STAGING_ABS="/data/user/0/${APP_ID}/files/WearBridgeStaging"
 APP_STAGING_REL="files/WearBridgeStaging"
 APP_STAGING_MANIFEST_REL="${APP_STAGING_REL}/staged-files.txt"
@@ -16,7 +17,7 @@ APP_STAGING_MANIFEST_REL="${APP_STAGING_REL}/staged-files.txt"
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") [-s PHONE_SERIAL] [--package PACKAGE_NAME] [--no-auto-send] [--poll-seconds N|--no-poll] <artifact>
+  $(basename "$0") [-s PHONE_SERIAL] [--password PASSWORD] [--package PACKAGE_NAME] [--no-auto-send] [--poll-seconds N|--no-poll] <artifact>
 
 What it does:
   1) Expands artifact into one or more APK files (if needed)
@@ -32,6 +33,7 @@ Artifacts supported:
 Options:
   -s, --serial SERIAL      ADB serial for the phone (required if multiple devices)
       --package NAME       Override package name sent to WearBridge
+      --password VALUE     Password forwarded to watch (required only if watch password is set)
       --no-auto-send       Open WearBridge with files selected, but do not auto-send to watch
       --poll-seconds N     Poll session progress from logcat for N seconds
       --no-poll            Do not poll logcat after launch
@@ -60,6 +62,7 @@ require_cmd() {
 
 SERIAL=""
 PACKAGE_OVERRIDE=""
+PASSWORD=""
 AUTO_SEND=1
 POLL_SECONDS=0
 POLL_ENABLED=1
@@ -90,6 +93,11 @@ while [[ $# -gt 0 ]]; do
     --package)
       [[ $# -ge 2 ]] || die "Missing value after $1"
       PACKAGE_OVERRIDE="$2"
+      shift 2
+      ;;
+    --password)
+      [[ $# -ge 2 ]] || die "Missing value after $1"
+      PASSWORD="$2"
       shift 2
       ;;
     --no-auto-send)
@@ -326,6 +334,10 @@ launch_wearbridge() {
     --ei "$EXTRA_FILE_COUNT" "${#uri_list[@]}"
     --es "$EXTRA_SESSION_ID" "$SESSION_ID"
   )
+
+  if [[ -n "$PASSWORD" ]]; then
+    cmd+=(--es "$EXTRA_PASSWORD" "$PASSWORD")
+  fi
 
   if [[ -n "$PACKAGE_OVERRIDE" ]]; then
     cmd+=(--es "$EXTRA_PACKAGE_NAME" "$PACKAGE_OVERRIDE")

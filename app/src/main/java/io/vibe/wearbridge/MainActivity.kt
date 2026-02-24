@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,6 +78,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SESSION_ID = "io.vibe.wearbridge.extra.SESSION_ID"
         const val EXTRA_REQUEST_ID = "io.vibe.wearbridge.extra.REQUEST_ID"
         const val EXTRA_SOURCE = "io.vibe.wearbridge.extra.SOURCE"
+        const val EXTRA_PASSWORD = "io.vibe.wearbridge.extra.PASSWORD"
     }
 
     private val viewModel: MainViewModel by viewModels()
@@ -92,6 +94,7 @@ class MainActivity : ComponentActivity() {
                 val connectedNodes by viewModel.connectedNodes.collectAsStateWithLifecycle()
                 val selectedFiles by viewModel.selectedFiles.collectAsStateWithLifecycle()
                 val packageName by viewModel.packageNameInput.collectAsStateWithLifecycle()
+                val messagePassword by viewModel.messagePassword.collectAsStateWithLifecycle()
                 val logs by viewModel.logs.collectAsStateWithLifecycle()
                 val apps by viewModel.apps.collectAsStateWithLifecycle()
                 val companionInfo by viewModel.companionInfo.collectAsStateWithLifecycle()
@@ -140,6 +143,14 @@ class MainActivity : ComponentActivity() {
                                     onSync = viewModel::requestSync,
                                     onCheckCompanion = viewModel::checkCompanion,
                                     onScreenshot = viewModel::requestWatchScreenshot
+                                )
+                            }
+
+                            item {
+                                SecurityCard(
+                                    password = messagePassword,
+                                    onPasswordChanged = viewModel::setMessagePassword,
+                                    onClearPassword = viewModel::clearMessagePassword
                                 )
                             }
 
@@ -216,29 +227,35 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(intent: Intent?) {
         val payload = intent ?: return
+        val isCustomInstallIntent = payload.action == ACTION_INSTALL_TO_WATCH
         if (payload.action == ACTION_REQUEST_WATCH_SCREENSHOT) {
             viewModel.requestWatchScreenshotFromIntent(
                 sessionId = payload.getStringExtra(EXTRA_SESSION_ID),
                 requestId = payload.getStringExtra(EXTRA_REQUEST_ID),
-                source = payload.getStringExtra(EXTRA_SOURCE)
+                source = payload.getStringExtra(EXTRA_SOURCE),
+                password = payload.getStringExtra(EXTRA_PASSWORD)
             )
             return
         }
 
+        val intentPassword = payload.getStringExtra(EXTRA_PASSWORD)
+        val sessionId = payload.getStringExtra(EXTRA_SESSION_ID)
+
         val uris = extractIncomingUris(payload)
         val autoSend = payload.getBooleanExtra(
             EXTRA_AUTO_SEND,
-            payload.action == ACTION_INSTALL_TO_WATCH
+            isCustomInstallIntent
         )
         val packageNameOverride = payload.getStringExtra(EXTRA_PACKAGE_NAME)
-        val sessionId = payload.getStringExtra(EXTRA_SESSION_ID)
 
         if (uris.isNotEmpty()) {
             viewModel.onFilesPicked(
                 uris = uris,
                 autoSend = autoSend,
                 packageNameOverride = packageNameOverride,
-                sessionId = sessionId
+                sessionId = sessionId,
+                autoSendPasswordOverride = if (isCustomInstallIntent) intentPassword else null,
+                requireExplicitAutoSendPassword = isCustomInstallIntent
             )
         }
     }
@@ -377,6 +394,49 @@ private fun ActionBar(
         Button(onClick = onSync) { Text("Sync apps") }
         OutlinedButton(onClick = onCheckCompanion) { Text("Check companion") }
         OutlinedButton(onClick = onScreenshot) { Text("Screenshot") }
+    }
+}
+
+@Composable
+private fun SecurityCard(
+    password: String,
+    onPasswordChanged: (String) -> Unit,
+    onClearPassword: () -> Unit
+) {
+    Card(shape = RoundedCornerShape(14.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "Message Password",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            OutlinedTextField(
+                value = password,
+                onValueChange = onPasswordChanged,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Password (optional)") },
+                visualTransformation = PasswordVisualTransformation()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = onClearPassword,
+                    enabled = password.isNotEmpty()
+                ) {
+                    Text("Clear")
+                }
+                Text(
+                    text = "Used for GUI actions. ADB custom intents must pass `${MainActivity.EXTRA_PASSWORD}` explicitly.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
     }
 }
 

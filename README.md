@@ -156,6 +156,7 @@ Notes:
 ## ADB Push via Phone App (PC -> Phone -> Watch)
 
 Use this when you want to trigger watch install from your PC, but route through the WearBridge app on the phone.
+If you set a message password in the watch app, pass the same password here.
 The script:
 
 1. expands artifact into one or more APK files,
@@ -167,7 +168,7 @@ Command:
 
 ```bash
 cd /workspaces/wearbridge-demo-7f3c
-./tools/watch_adb_install.sh -s <PHONE_SERIAL> <artifact>
+./tools/watch_adb_install.sh -s <PHONE_SERIAL> --password <PASSWORD> <artifact>
 ```
 
 Supported artifacts:
@@ -179,19 +180,20 @@ Supported artifacts:
 Examples:
 
 ```bash
-./tools/watch_adb_install.sh app-release.apk
-./tools/watch_adb_install.sh -s VQ92H7L1XK4M app-release.apk
-./tools/watch_adb_install.sh watchface.apks
-./tools/watch_adb_install.sh --package com.example.app split_bundle.zip
-./tools/watch_adb_install.sh --no-auto-send app-release.apk
-./tools/watch_adb_install.sh --poll-seconds 180 app-release.apk
-./tools/watch_adb_install.sh --no-poll app-release.apk
+./tools/watch_adb_install.sh --password secret123 app-release.apk
+./tools/watch_adb_install.sh -s VQ92H7L1XK4M --password secret123 app-release.apk
+./tools/watch_adb_install.sh --password secret123 watchface.apks
+./tools/watch_adb_install.sh --password secret123 --package com.example.app split_bundle.zip
+./tools/watch_adb_install.sh --password secret123 --no-auto-send app-release.apk
+./tools/watch_adb_install.sh --password secret123 --poll-seconds 180 app-release.apk
+./tools/watch_adb_install.sh --password secret123 --no-poll app-release.apk
 ```
 
 Options:
 
 - `-s, --serial`: phone device serial.
 - `--package`: override package name used by WearBridge.
+- `--password`: password forwarded to the watch (required only if a watch password is set).
 - `--no-auto-send`: only prefill files in app; do not immediately forward to watch.
 - `--poll-seconds N`: poll app progress log for session updates (default: `120`).
 - `--no-poll`: skip polling.
@@ -212,28 +214,32 @@ Per-session files on phone:
 
 Use this when you want to trigger a watch screenshot from your PC, but route through
 the phone app and save the image on the phone.
+If you set a message password in the watch app, pass the same password here.
 
 Command:
 
 ```bash
 cd /workspaces/wearbridge-demo-7f3c
-./tools/watch_adb_screenshot.sh -s <PHONE_SERIAL>
+./tools/watch_adb_screenshot.sh -s <PHONE_SERIAL> --password <PASSWORD>
 ```
 
 Examples:
 
 ```bash
-./tools/watch_adb_screenshot.sh
-./tools/watch_adb_screenshot.sh -s VQ92H7L1XK4M
-./tools/watch_adb_screenshot.sh --poll-seconds 60
-./tools/watch_adb_screenshot.sh --request-id demo-shot-001
-./tools/watch_adb_screenshot.sh --no-poll
+./tools/watch_adb_screenshot.sh --password secret123
+./tools/watch_adb_screenshot.sh -s VQ92H7L1XK4M --password secret123
+./tools/watch_adb_screenshot.sh --password secret123 --poll-seconds 60
+./tools/watch_adb_screenshot.sh --password secret123 --request-id demo-shot-001
+./tools/watch_adb_screenshot.sh --password secret123 --no-poll
 ```
 
 Notes:
 
 - The script launches the phone app with a custom screenshot intent, then optionally polls
   phone logcat session lines (`tag=WearBridge`).
+- Custom screenshot/install intents may include `io.vibe.wearbridge.extra.PASSWORD`.
+  It is required only when the watch has a message password set. Phone GUI actions can use
+  the password saved in the app UI.
 - Success condition is `state=session_finished reason=screenshot_saved`.
 - The watch accessibility service must already be enabled or the request will fail with
   `screenshot_request_failed`.

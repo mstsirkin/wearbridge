@@ -7,6 +7,7 @@ ACTION_SCREENSHOT="io.vibe.wearbridge.action.REQUEST_WATCH_SCREENSHOT"
 EXTRA_SESSION_ID="io.vibe.wearbridge.extra.SESSION_ID"
 EXTRA_REQUEST_ID="io.vibe.wearbridge.extra.REQUEST_ID"
 EXTRA_SOURCE="io.vibe.wearbridge.extra.SOURCE"
+EXTRA_PASSWORD="io.vibe.wearbridge.extra.PASSWORD"
 
 SERIAL=""
 POLL_ENABLED=1
@@ -14,11 +15,12 @@ POLL_SECONDS=0
 SOURCE_VALUE="adb"
 REQUEST_ID=""
 SESSION_ID=""
+PASSWORD=""
 
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") [-s PHONE_SERIAL] [--request-id ID] [--source NAME] [--poll-seconds N|--no-poll]
+  $(basename "$0") [-s PHONE_SERIAL] [--password PASSWORD] [--request-id ID] [--source NAME] [--poll-seconds N|--no-poll]
 
 What it does:
   1) Launches WearBridge on the phone with a screenshot request intent
@@ -29,6 +31,7 @@ Options:
   -s, --serial SERIAL      ADB serial for the phone (required if multiple devices)
       --request-id ID      Request identifier forwarded to the watch (defaults to session id)
       --source NAME        Source tag sent in screenshot request payload (default: adb)
+      --password VALUE     Password forwarded to watch (required only if watch password is set)
       --poll-seconds N     Poll session progress from logcat for N seconds
       --no-poll            Do not poll logcat after launch
   -h, --help               Show this help
@@ -63,6 +66,11 @@ while [[ $# -gt 0 ]]; do
     --source)
       [[ $# -ge 2 ]] || die "Missing value after $1"
       SOURCE_VALUE="$2"
+      shift 2
+      ;;
+    --password)
+      [[ $# -ge 2 ]] || die "Missing value after $1"
+      PASSWORD="$2"
       shift 2
       ;;
     --poll-seconds)
@@ -121,13 +129,19 @@ ensure_app_installed() {
 
 launch_wearbridge_screenshot() {
   local request_id="$1"
-  adb_cmd shell am start \
-    -S \
-    -n "$APP_ACTIVITY" \
-    -a "$ACTION_SCREENSHOT" \
-    --es "$EXTRA_SESSION_ID" "$SESSION_ID" \
-    --es "$EXTRA_REQUEST_ID" "$request_id" \
-    --es "$EXTRA_SOURCE" "$SOURCE_VALUE" >/dev/null
+  local -a cmd=(
+    shell am start
+    -S
+    -n "$APP_ACTIVITY"
+    -a "$ACTION_SCREENSHOT"
+    --es "$EXTRA_SESSION_ID" "$SESSION_ID"
+    --es "$EXTRA_REQUEST_ID" "$request_id"
+    --es "$EXTRA_SOURCE" "$SOURCE_VALUE"
+  )
+  if [[ -n "$PASSWORD" ]]; then
+    cmd+=(--es "$EXTRA_PASSWORD" "$PASSWORD")
+  fi
+  adb_cmd "${cmd[@]}" >/dev/null
 }
 
 poll_session_progress() {

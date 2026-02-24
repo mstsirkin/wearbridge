@@ -21,11 +21,14 @@ import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import io.vibe.wearbridge.watch.core.PhoneNodeMessenger
 import io.vibe.wearbridge.watch.core.WatchBridgeState
+import io.vibe.wearbridge.watch.core.MessagePasswordStore
 import io.vibe.wearbridge.watch.install.InstallResultReceiver
+import io.vibe.wearbridge.watch.protocol.AuthOnlyRequest
 import io.vibe.wearbridge.watch.protocol.CapabilityCheckRequest
 import io.vibe.wearbridge.watch.protocol.CapabilityReport
 import io.vibe.wearbridge.watch.protocol.CapabilityStatus
 import io.vibe.wearbridge.watch.protocol.CompanionInfo
+import io.vibe.wearbridge.watch.protocol.PackageActionRequest
 import io.vibe.wearbridge.watch.protocol.RemoteAppInfo
 import io.vibe.wearbridge.watch.protocol.ScreenshotRequest
 import io.vibe.wearbridge.watch.protocol.WearProtocol
@@ -59,6 +62,7 @@ class WearBridgeListenerService : WearableListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
+    private val passwordStore by lazy(LazyThreadSafetyMode.NONE) { MessagePasswordStore(this) }
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
         serviceScope.launch {
@@ -84,31 +88,120 @@ class WearBridgeListenerService : WearableListenerService() {
     private suspend fun handleMessage(messageEvent: MessageEvent) {
         when (messageEvent.path) {
             WearProtocol.SYNC_REQUEST_PATH -> {
+                val request = parseAuthOnlyRequest(messageEvent.data, "sync")
+                if (!authorizeControlRequest(
+                        action = "sync",
+                        providedPassword = request?.password,
+                        onFailure = { reason ->
+                            PhoneNodeMessenger.safeLogToPhone(
+                                context = this,
+                                message = "SYNC_STATUS failure message=${sanitizeLogValue("auth_$reason")}"
+                            )
+                        }
+                    )
+                ) {
+                    return
+                }
                 handleSyncRequest(messageEvent.sourceNodeId)
             }
 
             WearProtocol.CHECK_COMPANION_PATH -> {
+                val request = parseAuthOnlyRequest(messageEvent.data, "companion")
+                if (!authorizeControlRequest(
+                        action = "check_companion",
+                        providedPassword = request?.password,
+                        onFailure = { reason ->
+                            PhoneNodeMessenger.safeLogToPhone(
+                                context = this,
+                                message = "COMPANION_STATUS failure message=${sanitizeLogValue("auth_$reason")}"
+                            )
+                        }
+                    )
+                ) {
+                    return
+                }
                 handleCompanionCheck(messageEvent.sourceNodeId)
             }
 
             WearProtocol.CHECK_CAPABILITIES_PATH -> {
+                val request = parseCapabilityCheckRequest(messageEvent.data)
+                if (!authorizeControlRequest(
+                        action = "check_capabilities",
+                        providedPassword = request?.password,
+                        onFailure = { reason ->
+                            PhoneNodeMessenger.safeLogToPhone(
+                                context = this,
+                                message = "CAPABILITIES_STATUS failure message=${sanitizeLogValue("auth_$reason")}"
+                            )
+                        }
+                    )
+                ) {
+                    return
+                }
                 handleCapabilitiesCheck(
                     sourceNodeId = messageEvent.sourceNodeId,
-                    payloadBytes = messageEvent.data
+                    payloadBytes = messageEvent.data,
+                    parsedRequest = request
                 )
             }
 
             WearProtocol.REQUEST_SCREENSHOT_PATH -> {
-                handleScreenshotRequest(messageEvent.data)
+                val request = parseScreenshotRequest(messageEvent.data)
+                if (!authorizeControlRequest(
+                        action = "request_screenshot",
+                        providedPassword = request?.password,
+                        onFailure = { reason ->
+                            val requestId = request?.requestId?.trim()?.takeIf { it.isNotEmpty() }
+                            val requestToken = requestId ?: "none"
+                            PhoneNodeMessenger.safeLogToPhone(
+                                context = this,
+                                message = "SCREENSHOT_STATUS status_failure request_id=$requestToken code=auth_failed message=${sanitizeLogValue(reason)}"
+                            )
+                        }
+                    )
+                ) {
+                    return
+                }
+                handleScreenshotRequest(request)
             }
 
             WearProtocol.REQUEST_APK_PATH -> {
-                val packageName = messageEvent.data.decodeUtf8().trim()
+                val request = parsePackageActionRequest(messageEvent.data, "export")
+                val packageName = request?.packageName.orEmpty().trim()
+                if (!authorizeControlRequest(
+                        action = "request_apk",
+                        providedPassword = request?.password,
+                        onFailure = { reason ->
+                            val targetPackage = if (packageName.isBlank()) "unknown" else packageName
+                            PhoneNodeMessenger.safeLogToPhone(
+                                context = this,
+                                message = "EXPORT_STATUS status_failure package=$targetPackage code=-1 message=${sanitizeLogValue("auth_$reason")}"
+                            )
+                        }
+                    )
+                ) {
+                    return
+                }
                 handleExportRequest(packageName)
             }
 
             WearProtocol.DELETE_APP_PATH -> {
-                val packageName = messageEvent.data.decodeUtf8().trim()
+                val request = parsePackageActionRequest(messageEvent.data, "delete")
+                val packageName = request?.packageName.orEmpty().trim()
+                if (!authorizeControlRequest(
+                        action = "delete_app",
+                        providedPassword = request?.password,
+                        onFailure = { reason ->
+                            val targetPackage = if (packageName.isBlank()) "unknown" else packageName
+                            PhoneNodeMessenger.safeLogToPhone(
+                                context = this,
+                                message = "DELETE_STATUS failure package=$targetPackage message=${sanitizeLogValue("auth_$reason")}"
+                            )
+                        }
+                    )
+                ) {
+                    return
+                }
                 handleDeleteRequest(packageName)
             }
 
@@ -177,8 +270,12 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
-    private suspend fun handleCapabilitiesCheck(sourceNodeId: String, payloadBytes: ByteArray) {
-        val request = parseCapabilityCheckRequest(payloadBytes)
+    private suspend fun handleCapabilitiesCheck(
+        sourceNodeId: String,
+        payloadBytes: ByteArray,
+        parsedRequest: CapabilityCheckRequest? = null
+    ) {
+        val request = parsedRequest ?: parseCapabilityCheckRequest(payloadBytes)
         runCatching {
             val report = buildCapabilityReport(request)
             val payload = json.encodeToString(report).toByteArray(Charsets.UTF_8)
@@ -194,8 +291,7 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
-    private suspend fun handleScreenshotRequest(payloadBytes: ByteArray) {
-        val request = parseScreenshotRequest(payloadBytes)
+    private suspend fun handleScreenshotRequest(request: ScreenshotRequest?) {
         val requestId = request?.requestId?.trim()?.takeIf { it.isNotEmpty() }
         val requestToken = requestId ?: "none"
 
@@ -322,6 +418,55 @@ class WearBridgeListenerService : WearableListenerService() {
         }
     }
 
+    private fun parseAuthOnlyRequest(payloadBytes: ByteArray, label: String): AuthOnlyRequest? {
+        if (payloadBytes.isEmpty()) return null
+        val payload = payloadBytes.decodeUtf8().trim()
+        if (payload.isEmpty()) return null
+        return runCatching {
+            json.decodeFromString<AuthOnlyRequest>(payload)
+        }.getOrElse {
+            WatchBridgeState.log("$label request payload decode failed; using defaults")
+            null
+        }
+    }
+
+    private fun parsePackageActionRequest(payloadBytes: ByteArray, label: String): PackageActionRequest? {
+        if (payloadBytes.isEmpty()) return null
+        val payload = payloadBytes.decodeUtf8().trim()
+        if (payload.isEmpty()) return null
+        return runCatching {
+            json.decodeFromString<PackageActionRequest>(payload)
+        }.getOrElse {
+            // Backward compatibility: legacy phone sent just the package name string.
+            WatchBridgeState.log("$label request payload uses legacy package format")
+            PackageActionRequest(packageName = payload)
+        }
+    }
+
+    private suspend fun authorizeControlRequest(
+        action: String,
+        providedPassword: String?,
+        onFailure: suspend (reason: String) -> Unit
+    ): Boolean {
+        val expectedPassword = passwordStore.getPassword()
+        if (expectedPassword == null) {
+            return true
+        }
+
+        if (providedPassword == expectedPassword) {
+            return true
+        }
+
+        val reason = if (providedPassword.isNullOrBlank()) {
+            "missing_password"
+        } else {
+            "invalid_password"
+        }
+        WatchBridgeState.log("Rejected $action: $reason")
+        onFailure(reason)
+        return false
+    }
+
     private fun parseCapabilityCheckRequest(payloadBytes: ByteArray): CapabilityCheckRequest? {
         if (payloadBytes.isEmpty()) return null
         val payload = payloadBytes.decodeUtf8().trim()
@@ -398,10 +543,26 @@ class WearBridgeListenerService : WearableListenerService() {
     private suspend fun handleInstallPayload(dataItem: DataItem) {
         val dataMap = DataMapItem.fromDataItem(dataItem).dataMap
         val packageName = dataMap.getString(WearProtocol.KEY_PACKAGE_NAME).orEmpty()
+        val providedPassword = dataMap.getString(WearProtocol.KEY_PASSWORD)
         val apkCount = dataMap.getInt(WearProtocol.KEY_APK_COUNT)
         val installDir = File(cacheDir, "install-${System.currentTimeMillis()}").apply { mkdirs() }
 
         try {
+            if (!authorizeControlRequest(
+                    action = "install_payload",
+                    providedPassword = providedPassword,
+                    onFailure = { reason ->
+                        val targetPackage = if (packageName.isBlank()) "unknown" else packageName
+                        PhoneNodeMessenger.safeLogToPhone(
+                            context = this,
+                            message = "INSTALL_STATUS status_failure package=$targetPackage code=-1 message=${sanitizeLogValue("auth_$reason")}"
+                        )
+                    }
+                )
+            ) {
+                return
+            }
+
             if (apkCount <= 0) {
                 error("apk_count must be > 0")
             }

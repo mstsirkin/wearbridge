@@ -35,6 +35,7 @@ object WearProtocol {
     const val KEY_CAPTURE_TIMESTAMP = "capture_timestamp"
     const val KEY_IMAGE_WIDTH = "width"
     const val KEY_IMAGE_HEIGHT = "height"
+    const val KEY_PASSWORD = "password"
 }
 
 fun indexedApkAssetKey(index: Int): String = "apk_$index"
@@ -51,14 +52,28 @@ data class CompanionInfo(
 data class ScreenshotRequest(
     @SerialName("request_id")
     val requestId: String? = null,
-    val source: String? = null
+    val source: String? = null,
+    val password: String? = null
 )
 
 @Serializable
 data class CapabilityCheckRequest(
     @SerialName("request_id")
     val requestId: String? = null,
-    val features: List<String>? = null
+    val features: List<String>? = null,
+    val password: String? = null
+)
+
+@Serializable
+data class AuthOnlyRequest(
+    val password: String? = null
+)
+
+@Serializable
+data class PackageActionRequest(
+    @SerialName("package_name")
+    val packageName: String,
+    val password: String? = null
 )
 
 @Serializable

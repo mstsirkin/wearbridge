@@ -9,7 +9,9 @@ import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import io.vibe.wearbridge.protocol.CapabilityCheckRequest
+import io.vibe.wearbridge.protocol.AuthOnlyRequest
 import io.vibe.wearbridge.files.SelectedFile
+import io.vibe.wearbridge.protocol.PackageActionRequest
 import io.vibe.wearbridge.protocol.ScreenshotRequest
 import io.vibe.wearbridge.protocol.WearProtocol
 import io.vibe.wearbridge.protocol.indexedApkAssetKey
@@ -36,19 +38,67 @@ class WearBridgeClient(context: Context) {
     suspend fun connectedNodes(): List<Node> = nodeClient.connectedNodes.await()
 
     suspend fun requestAppSync(): Int {
-        return sendMessageToAllNodes(WearProtocol.SYNC_REQUEST_PATH, ByteArray(0))
+        return requestAppSync(password = null)
+    }
+
+    suspend fun requestAppSync(password: String?): Int {
+        val payload = if (password.isNullOrBlank()) {
+            ByteArray(0)
+        } else {
+            json.encodeToString(AuthOnlyRequest(password = password)).toByteArray(Charsets.UTF_8)
+        }
+        return sendMessageToAllNodes(WearProtocol.SYNC_REQUEST_PATH, payload)
     }
 
     suspend fun requestCompanionInfo(): Int {
-        return sendMessageToAllNodes(WearProtocol.CHECK_COMPANION_PATH, ByteArray(0))
+        return requestCompanionInfo(password = null)
+    }
+
+    suspend fun requestCompanionInfo(password: String?): Int {
+        val payload = if (password.isNullOrBlank()) {
+            ByteArray(0)
+        } else {
+            json.encodeToString(AuthOnlyRequest(password = password)).toByteArray(Charsets.UTF_8)
+        }
+        return sendMessageToAllNodes(WearProtocol.CHECK_COMPANION_PATH, payload)
     }
 
     suspend fun requestApkExport(packageName: String): Int {
-        return sendMessageToAllNodes(WearProtocol.REQUEST_APK_PATH, packageName.toByteArray(Charsets.UTF_8))
+        return requestApkExport(packageName = packageName, password = null)
+    }
+
+    suspend fun requestApkExport(packageName: String, password: String?): Int {
+        val normalizedPassword = password?.takeIf { it.isNotBlank() }
+        val payload = if (normalizedPassword == null) {
+            packageName.toByteArray(Charsets.UTF_8)
+        } else {
+            json.encodeToString(
+                PackageActionRequest(
+                    packageName = packageName,
+                    password = normalizedPassword
+                )
+            ).toByteArray(Charsets.UTF_8)
+        }
+        return sendMessageToAllNodes(WearProtocol.REQUEST_APK_PATH, payload)
     }
 
     suspend fun requestDelete(packageName: String): Int {
-        return sendMessageToAllNodes(WearProtocol.DELETE_APP_PATH, packageName.toByteArray(Charsets.UTF_8))
+        return requestDelete(packageName = packageName, password = null)
+    }
+
+    suspend fun requestDelete(packageName: String, password: String?): Int {
+        val normalizedPassword = password?.takeIf { it.isNotBlank() }
+        val payload = if (normalizedPassword == null) {
+            packageName.toByteArray(Charsets.UTF_8)
+        } else {
+            json.encodeToString(
+                PackageActionRequest(
+                    packageName = packageName,
+                    password = normalizedPassword
+                )
+            ).toByteArray(Charsets.UTF_8)
+        }
+        return sendMessageToAllNodes(WearProtocol.DELETE_APP_PATH, payload)
     }
 
     suspend fun requestScreenshot(request: ScreenshotRequest? = null): Int {
@@ -72,6 +122,7 @@ class WearBridgeClient(context: Context) {
     suspend fun sendInstallData(
         packageName: String,
         selectedFiles: List<SelectedFile>,
+        password: String? = null,
         onProgress: ((UploadProgress) -> Unit)? = null
     ) {
         require(selectedFiles.isNotEmpty()) { "selectedFiles must not be empty" }
@@ -98,6 +149,9 @@ class WearBridgeClient(context: Context) {
 
         putDataMapRequest.dataMap.putString(WearProtocol.KEY_PACKAGE_NAME, packageName)
         putDataMapRequest.dataMap.putInt(WearProtocol.KEY_APK_COUNT, selectedFiles.size)
+        password?.takeIf { it.isNotBlank() }?.let {
+            putDataMapRequest.dataMap.putString(WearProtocol.KEY_PASSWORD, it)
+        }
 
         selectedFiles.forEachIndexed { index, file ->
             putDataMapRequest.dataMap.putAsset(indexedApkAssetKey(index), Asset.createFromUri(file.uri))

@@ -46,19 +46,29 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
 ### 2.1 Message paths
 
 - `/request-sync`
-  - Payload: empty bytes
+  - Payload: empty bytes or JSON object
+  - Optional JSON field:
+    - `password` (string, optional; required when watch has a message password configured)
   - Meaning: request app list sync
 
 - `/request-apk`
-  - Payload: UTF-8 package name
+  - Payload: UTF-8 package name (legacy) or JSON object
+  - Recommended JSON fields:
+    - `package_name` (string, required)
+    - `password` (string, optional; required when watch has a message password configured)
   - Meaning: request APK export from watch
 
 - `/delete-app`
-  - Payload: UTF-8 package name
+  - Payload: UTF-8 package name (legacy) or JSON object
+  - Recommended JSON fields:
+    - `package_name` (string, required)
+    - `password` (string, optional; required when watch has a message password configured)
   - Meaning: request uninstall on watch
 
 - `/check-companion`
-  - Payload: empty bytes
+  - Payload: empty bytes or JSON object
+  - Optional JSON field:
+    - `password` (string, optional; required when watch has a message password configured)
   - Meaning: request companion version info
 
 - `/check-capabilities`
@@ -66,6 +76,7 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
   - Recommended JSON fields:
     - `request_id` (string, optional)
     - `features` (array of strings, optional; e.g. `["screenshot"]`)
+    - `password` (string, optional; required when watch has a message password configured)
   - Meaning: request structured watch capability/readiness status (including screenshot)
 
 - `/request-screenshot`
@@ -73,6 +84,7 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
   - Recommended JSON fields:
     - `request_id` (string, optional; adb should set this to match `SESSION_ID`)
     - `source` (string, optional; e.g. `phone_ui` or `adb`)
+    - `password` (string, optional; required when watch has a message password configured)
   - Meaning: request screenshot capture on watch and return image asset to phone
 
 ### 2.2 Install payload (`DataItem`)
@@ -82,6 +94,7 @@ All path constants are defined in `app/src/main/java/io/vibe/wearbridge/protocol
 - Keys:
   - `package_name`: string
   - `apk_count`: int
+  - `password`: string (optional; required when watch has a message password configured)
   - For each `i` in `[0..apk_count-1]`:
     - `apk_<i>`: `Asset`
     - `file_name_<i>`: string
@@ -257,6 +270,7 @@ Main activity: `io.vibe.wearbridge/.MainActivity`
   - `io.vibe.wearbridge.extra.AUTO_SEND` (bool, defaults to `true` for this action)
   - `io.vibe.wearbridge.extra.PACKAGE_NAME` (optional string override)
   - `io.vibe.wearbridge.extra.SESSION_ID` (string)
+  - `io.vibe.wearbridge.extra.PASSWORD` (string, optional; required when watch has a message password configured)
 
 For non-custom intents, `AUTO_SEND` default is `false` unless explicit extra is set.
 
@@ -272,11 +286,12 @@ URIs used by `tools/watch_adb_install.sh` are `file://` paths under:
   - `io.vibe.wearbridge.extra.SESSION_ID` (string, recommended for logcat polling)
   - `io.vibe.wearbridge.extra.REQUEST_ID` (optional string; if absent, phone may reuse `SESSION_ID`)
   - `io.vibe.wearbridge.extra.SOURCE` (optional string; e.g. `adb`)
+  - `io.vibe.wearbridge.extra.PASSWORD` (string, optional; required when watch has a message password configured)
 
 Phone behavior for this intent:
 
 - Begin/log a session using the provided `SESSION_ID` (if present)
-- Send `/request-screenshot` to connected watch node(s)
+- Send `/request-screenshot` to connected watch node(s) (including `password` from the intent, if provided, forwarded as-is)
 - Wait for `/screenshot-export` `DataItem`, save image locally, and log save result
 
 ## 5. Session and Logcat Protocol

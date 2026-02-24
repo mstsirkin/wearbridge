@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.wearable.Node
 import io.vibe.wearbridge.core.BridgeState
+import io.vibe.wearbridge.core.MessagePasswordStore
 import io.vibe.wearbridge.core.UploadProgress
 import io.vibe.wearbridge.core.WearBridgeClient
 import io.vibe.wearbridge.files.FileSelection
@@ -22,6 +23,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val client = WearBridgeClient(application)
+    private val passwordStore = MessagePasswordStore(application)
 
     val logs = BridgeState.logs
     val apps = BridgeState.apps
@@ -37,6 +39,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _packageNameInput = MutableStateFlow("")
     val packageNameInput: StateFlow<String> = _packageNameInput.asStateFlow()
 
+    private val _messagePassword = MutableStateFlow(passwordStore.getPassword().orEmpty())
+    val messagePassword: StateFlow<String> = _messagePassword.asStateFlow()
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
@@ -49,6 +54,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPackageNameInput(value: String) {
         _packageNameInput.value = value
+    }
+
+    fun setMessagePassword(value: String) {
+        _messagePassword.value = value
+        passwordStore.setPassword(value)
+    }
+
+    fun clearMessagePassword() {
+        _messagePassword.value = ""
+        passwordStore.setPassword(null)
     }
 
     fun clearSelectedFiles() {
@@ -66,7 +81,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun requestSync() {
         launchBusy {
-            val sent = client.requestAppSync()
+            val sent = client.requestAppSync(password = currentGuiPassword())
             if (sent == 0) {
                 BridgeState.log("No watch connected for sync request")
             } else {
@@ -77,7 +92,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkCompanion() {
         launchBusy {
-            val sent = client.requestCompanionInfo()
+            val sent = client.requestCompanionInfo(password = currentGuiPassword())
             if (sent == 0) {
                 BridgeState.log("No watch connected for companion check")
             } else {
@@ -92,7 +107,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sendScreenshotRequest(
                 sessionId = null,
                 requestId = null,
-                source = "phone_ui"
+                source = "phone_ui",
+                passwordOverride = currentGuiPassword(),
+                requireExplicitPassword = false
             )
         }
     }
@@ -100,20 +117,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun requestWatchScreenshotFromIntent(
         sessionId: String?,
         requestId: String?,
-        source: String?
+        source: String?,
+        password: String?
     ) {
         launchBusy {
             sendScreenshotRequest(
                 sessionId = sessionId?.trim()?.takeIf { it.isNotEmpty() },
                 requestId = requestId?.trim()?.takeIf { it.isNotEmpty() },
-                source = source?.trim()?.takeIf { it.isNotEmpty() } ?: "adb"
+                source = source?.trim()?.takeIf { it.isNotEmpty() } ?: "adb",
+                passwordOverride = password,
+                requireExplicitPassword = true
             )
         }
     }
 
     fun requestExport(packageName: String) {
         launchBusy {
-            val sent = client.requestApkExport(packageName)
+            val sent = client.requestApkExport(packageName, password = currentGuiPassword())
             if (sent == 0) {
                 BridgeState.log("No watch connected for export request")
             } else {
@@ -124,7 +144,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun requestDelete(packageName: String) {
         launchBusy {
-            val sent = client.requestDelete(packageName)
+            val sent = client.requestDelete(packageName, password = currentGuiPassword())
             if (sent == 0) {
                 BridgeState.log("No watch connected for delete request")
             } else {
@@ -137,7 +157,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         uris: List<Uri>,
         autoSend: Boolean = false,
         packageNameOverride: String? = null,
-        sessionId: String? = null
+        sessionId: String? = null,
+        autoSendPasswordOverride: String? = null,
+        requireExplicitAutoSendPassword: Boolean = false
     ) {
         if (uris.isEmpty()) return
 
@@ -209,6 +231,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (autoSend) {
+                    val resolvedAutoSendPassword = when {
+                        requireExplicitAutoSendPassword -> {
+                            autoSendPasswordOverride?.takeIf { it.isNotBlank() }
+                        }
+                        else -> autoSendPasswordOverride?.takeIf { it.isNotBlank() } ?: currentGuiPassword()
+                    }
                     if (resolvedPackage.isBlank()) {
                         BridgeState.log("Auto-send skipped: package name is required")
                         if (normalizedSessionId != null) {
@@ -234,6 +262,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         client.sendInstallData(
                             packageName = resolvedPackage,
                             selectedFiles = files,
+                            password = resolvedAutoSendPassword,
                             onProgress = { progress ->
                                 reportUploadProgress(normalizedSessionId, progress)
                             }
@@ -302,6 +331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 client.sendInstallData(
                     packageName = packageName,
                     selectedFiles = files,
+                    password = currentGuiPassword(),
                     onProgress = { progress ->
                         reportUploadProgress(null, progress)
                     }
@@ -337,7 +367,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val requestId = "caps-${System.currentTimeMillis()}"
         val request = CapabilityCheckRequest(
             requestId = requestId,
-            features = listOf("screenshot")
+            features = listOf("screenshot"),
+            password = currentGuiPassword()
         )
 
         val sent = runCatching {
@@ -366,11 +397,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun sendScreenshotRequest(
         sessionId: String?,
         requestId: String?,
-        source: String?
+        source: String?,
+        passwordOverride: String?,
+        requireExplicitPassword: Boolean
     ) {
         val normalizedSessionId = sessionId?.trim()?.takeIf { it.isNotEmpty() }
         val normalizedRequestId = (requestId ?: normalizedSessionId)?.trim()?.takeIf { it.isNotEmpty() }
         val normalizedSource = source?.trim()?.takeIf { it.isNotEmpty() }
+        val resolvedPassword = if (requireExplicitPassword) {
+            passwordOverride?.takeIf { it.isNotBlank() }
+        } else {
+            passwordOverride?.takeIf { it.isNotBlank() } ?: currentGuiPassword()
+        }
 
         if (normalizedSessionId != null) {
             BridgeState.beginScreenshotSession(
@@ -387,7 +425,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val request = ScreenshotRequest(
             requestId = normalizedRequestId,
-            source = normalizedSource
+            source = normalizedSource,
+            password = resolvedPassword
         )
 
         val sent = runCatching {
@@ -436,5 +475,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             _busy.value = false
         }
+    }
+
+    private fun currentGuiPassword(): String? {
+        return _messagePassword.value.takeIf { it.isNotBlank() }
     }
 }
